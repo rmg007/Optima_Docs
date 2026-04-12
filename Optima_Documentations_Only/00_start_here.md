@@ -4,105 +4,91 @@
 
 ## North Star
 
-A web-based AI coding agent with built-in project intelligence that indexes your project, remembers what errors you've hit and how you fixed them, and structurally injects context into the Anthropic API to make every session smarter than the last.
+An MCP server that indexes your project, remembers what errors you've hit and how you fixed them, and maintains a [CLAUDE.md](http://CLAUDE.md) that makes every Claude Code session smarter than the last.
 
 ## Reading Order
 
 | Order | File | Purpose |
 | --- | --- | --- |
-| 1 | `00_start_here.md` | This file. Rules, tech stack, constraints. |
-| 2 | `01_product_spec_mvp.md` | What OptiCode is, how it works, what to build, project structure. |
-| 3 | `02_data_model_and_schema.md` | Drizzle schemas, TypeScript interfaces, SQLite tables. |
-| 4 | `03_AGENT_AND_TOOL_SPECS.md` | Anthropic tool definitions, agent loop, and caching. |
-| 5 | `04_CONTEXT_INJECTION_AND_LEARNING.md` | Exact rules for context injection and post-session learning. |
+| 1 | `00_START_HERE.md` | This file. Rules, tech stack, constraints. |
+| 2 | `01_PRODUCT_SPEC_MVP.md` | What Optima is, how it works, what to build, project structure. |
+| 3 | `02_DATA_MODEL_AND_SCHEMA.md` | Drizzle schemas, TypeScript interfaces, SQLite tables. Copy verbatim. |
+| 4 | `03_MCP_TOOL_CONTRACTS.md` | Zod input/output schemas for all 3 tools. Copy verbatim. |
+| 5 | `04_INCEPTION_PAYLOAD.md` | Exact file content Optima generates in host projects. Copy verbatim. |
 
 ## Tech Stack (Locked)
 
 | Component | Choice | Command |
 | --- | --- | --- |
-| Runtime | Bun | `bun run`, `bun test`, `bunx` |
+| Runtime | Bun | `bun run`, `bun test`, `bunx` — never `npm`, `npx`, or `node` |
 | Language | TypeScript | Strict mode. No `any`. |
-| LLM Integration | `@anthropic-ai/sdk` | Direct Messages API calls with Tool Use. |
-| Frontend | React + Vite + Tailwind | Served by Bun. |
-| Database | SQLite via `better-sqlite3` | Single file at `.opticode/opticode.db`. Uses better-sqlite3 for runtime portability. |
+| MCP SDK | `@modelcontextprotocol/sdk` | Stdio transport only. |
+| Database | SQLite via `better-sqlite3` | Single file at `.optima/optima.db`. Uses better-sqlite3 for runtime portability (works on both Bun and Node). See resolved Q6. |
 | ORM | Drizzle ORM (`drizzle-orm`  • `drizzle-kit`) | Typed queries. SQLite dialect. |
 | AST Parsing | `tree-sitter`  • `tree-sitter-typescript` | For entity extraction. |
-| Gitignore Parsing | `ignore` (npm, ^7.0.0) | Correct gitignore semantics for file indexing exclusions. |
-| Bundler | `tsup` (Backend) / `vite` (Frontend) | |
+| Gitignore Parsing | `ignore` (npm, ^7.0.0) | Correct gitignore semantics. Not hand-rolled regex (resolved Q5). |
+| Bundler | `tsup` | Single entry point bundle. |
 | Test Runner | Vitest | `bun run test` via vitest. |
 
 ## Ground Rules
 
 1. **No file exceeds 300 lines.** Split into separate modules if approaching the limit.
-2. **Copy verbatim.** When a spec provides a fenced TypeScript, SQL, or Zod block, reproduce it byte-for-byte.
-3. **The agent loop calls the Anthropic Messages API directly.**
-4. **Model routing is a first-class component.** Switch between Haiku, Sonnet, and Opus depending on the task mapping.
-5. **The frontend is a React SPA served by the Bun server.**
-6. **All cross-module inputs validated with Zod.** No exceptions.
-7. **All file I/O must be async.** Never use synchronous fs methods in the hot path. (Exception: `better-sqlite3` database queries are intentionally synchronous by design).
-8. **Tests are mandatory.** Every module ships with tests. Minimum 80% coverage.
-9. **Errors use a closed taxonomy.** Every thrown error must use one of the error codes defined in the specification documents. Use `OptiCodeError`.
-10. **Paths are always forward-slash normalized.** All file paths stored in SQLite use forward slashes (`src/utils/foo.ts`), regardless of OS. Normalize on ingestion using `path.replace(/\\/g, '/')`. Symlinks are NOT followed - skip silently.
-
-## Project Structure
-
-```
-opticode/
-├── package.json
-├── tsconfig.json
-├── vite.config.ts              # Frontend build config
-├── tsup.config.ts              # Backend build config
-├── vitest.config.ts
-├── .env.example                # ANTHROPIC_API_KEY=sk-ant-...
-├── src/
-│   ├── index.ts                # Entry point: starts Bun server
-│   ├── agent/                  # Core agent loop, router, cache, and Anthropic tools
-│   ├── tools/                  # Executors: read, write, edit, bash, grep, glob, permissions
-│   ├── server/                 # Bun HTTP server, WebSocket, and protocol types
-│   ├── intelligence/           # Indexer, Memory (Gotchas, Rules), Context Builder, Learner
-│   ├── db/                     # Connection, schemas, migrations
-│   └── utils/                  # Hasher, paths, errors
-├── frontend/                   # React app, chatting UI, tree viewer, intelligence dashboard
-│   ├── index.html
-│   ├── src/
-│   └── tailwind.config.ts
-├── test/
-└── .opticode/                  # Per-project data directory generated at runtime
-```
+2. **Copy verbatim.** When a spec provides a fenced TypeScript, SQL, or Zod block, reproduce it byte-for-byte. Do not rename fields, reorder properties, or add fields.
+3. **All cross-module inputs validated with Zod.** No exceptions.
+4. **All file I/O must be async.** Never use synchronous fs methods in the hot path. (Exception: `better-sqlite3` database queries are intentionally synchronous by design).
+5. **Tests are mandatory.** Every module ships with tests. Minimum 80% coverage.
+6. **Errors use a closed taxonomy.** Every thrown error must use one of the error codes defined in `03_MCP_TOOL_CONTRACTS.md`. Never throw bare `new Error('...')`.
+7. **Paths are always forward-slash normalized.** All file paths stored in SQLite and returned in tool outputs use forward slashes (`src/utils/foo.ts`), regardless of OS. Normalize on ingestion using `path.replace(/\\/g, '/')`. Symlinks are NOT followed — if `fs.lstat` reports a symlink, skip the file silently. This avoids infinite loops and ensures deterministic indexing.
 
 ## Claude Code State Awareness
 
-OptiCode operates alongside the user's workspace, and understanding Claude Code's internal state architecture is still critical to avoid conflicts or indexing private/global agent state if a user happens to use it.
+Optima operates alongside Claude Code. Understanding Claude Code's internal state architecture is critical to avoid conflicts and respect boundaries.
 
 **Claude Code's local state lives in two places:**
 
 - `~/.claude/` — Global user state (session transcripts, file-history, caches, global settings). NEVER index this.
-- `<project>/.claude/` — Project-level config (settings.json, agents/, commands/, skills/, rules/).
+- `<project>/.claude/` — Project-level config (settings.json, agents/, commands/, skills/, rules/). Optima WRITES to this directory.
 
-**Security-sensitive paths OptiCode must NEVER index:**
+**Settings hierarchy (highest to lowest priority):**
+
+1. Managed settings (enterprise MDM) — cannot be overridden
+2. CLI arguments
+3. `.claude/settings.local.json` — personal, gitignored
+4. `.claude/settings.json` — team-shared, committed
+5. `~/.claude/settings.json` — user global defaults
+
+**Security-sensitive paths Optima must NEVER index:**
 
 - `~/.claude/session-env/` — contains plaintext environment variables (API keys, tokens)
 - `~/.claude/projects/` — full session transcripts in JSONL
 - `~/.claude/file-history/` — before/after file edit snapshots
-- `CLAUDE.local.md` — developer's personal instruction overrides. OptiCode must never read, modify, or generate this file.
+- `CLAUDE.local.md` — developer's personal instruction overrides (gitignored, higher priority than [CLAUDE.md](http://CLAUDE.md)). Optima must never read, modify, or generate this file. It is the developer's personal space.
 - `.claude/settings.local.json` — personal permission overrides (gitignored)
 - Any `.env` file or `**/secrets/**` path
 
+**Hooks (Phase 2 only):** Claude Code supports lifecycle hooks (`PreToolUse`, `PostToolUse`, `TaskCompleted`, etc.) configured in `.claude/settings.json`. These could strengthen the inception pattern by auto-triggering `optima_memorize` calls. However, hooks execute shell commands — they cannot directly invoke MCP tools via stdio. Phase 2 will explore a thin CLI bridge (`bunx optima-hook log-outcome ...`) that hooks can call.
+
+**Agent memory (Phase 2 only):** Claude Code agents support a `memory` frontmatter field with scopes (`project`, `local`, `user`). Phase 2 generated agents should use `memory: project` for persistent cross-session knowledge stored in `.claude/agent-memory/<agent-name>/`.
+
 ## DO NOT
 
-- **DO NOT use the Claude Agent SDK.** It requires separate API billing. Rely ONLY on the Anthropic SDK (`@anthropic-ai/sdk`).
-- **DO NOT implement MCP transport.** OptiCode is not an MCP server. It manages the agent loop purely via HTTP/WebSockets.
-- **DO NOT generate CLAUDE.md files.** OptiCode injects context directly into the Anthropic API's system prompt to avoid cluttering workspaces.
-- **DO NOT implement a file watcher.** OptiCode uses lazy indexing via `fs.stat` mtime checks inside context building. No background processes, no `chokidar`, no `fs.watch`.
+- **DO NOT implement a file watcher.** Optima uses lazy indexing via `fs.stat` mtime checks inside `optima_get_context`. No background processes, no `chokidar`, no `fs.watch`.
+- **DO NOT generate Claude Code hooks in MVP.** Hooks (`.claude/settings.json` `PostToolUse`/`TaskCompleted` events) are a Phase 2 enhancement. MVP uses `.claude/rules/` only for the inception pattern.
+- **DO NOT modify `.claude/settings.json` permissions or deny rules.** Optima never writes permission rules. Security boundaries are the developer's domain.
 - **DO NOT index Claude Code's internal state.** Never read or index `~/.claude/`, `.claude/session-env/`, `.claude/projects/`, or `.claude/file-history/`.
+- **DO NOT build a web UI, CLI interface, or REST API.** Optima is a headless MCP server. Stdio transport only.
+- **DO NOT implement Phase 2 features.** No agent generation, no token optimization scoring, no adaptive prompts, no hook-based feedback. If it's not in `01_PRODUCT_SPEC_MVP.md` included list, don't build it.
 - **DO NOT use `npm`, `npx`, or `node` commands.** Bun only.
-- **DO NOT use `bun:sqlite` directly.** Use `better-sqlite3` for runtime portability.
+- **DO NOT use `bun:sqlite` directly.** Use `better-sqlite3` for runtime portability (resolved Q6 — allows fallback to Node if Bun's MCP spawner has issues). If Bun is proven reliable, can swap to `bun:sqlite` as a future optimization.
+- **DO NOT install `axios`, `node-fetch`, `express`, `react`, or `electron`.** This project has no HTTP client, no HTTP server, no frontend.
+- **DO NOT create a separate database file for learning/memory.** Everything lives in one SQLite database: `.optima/optima.db`.
+- **DO NOT guess at schema fields, Zod shapes, or error codes.** Every one is defined explicitly in the spec documents.
 
 ## When Stuck
 
 If a spec is ambiguous or two documents seem to contradict each other:
 
-1. Trust `02_data_model_and_schema.md` for data shapes.
-2. Trust `03_AGENT_AND_TOOL_SPECS.md` for tool behavior and agent loop.
-3. Trust `04_CONTEXT_INJECTION_AND_LEARNING.md` for context generation logic.
+1. Trust `02_DATA_MODEL_AND_SCHEMA.md` for data shapes.
+2. Trust `03_MCP_TOOL_CONTRACTS.md` for tool behavior.
+3. Trust `04_INCEPTION_PAYLOAD.md` for generated file content.
 4. If still unclear, stop and ask. Do not improvise.
