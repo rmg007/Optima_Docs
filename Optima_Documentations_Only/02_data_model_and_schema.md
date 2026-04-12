@@ -4,6 +4,24 @@ All data lives in ONE SQLite database: `.optima/optima.db` at the project root.
 
 **SQLite driver:** `better-sqlite3` (not `bun:sqlite`) for runtime portability — works on both Bun and Node.js. See resolved Q6 in Product Specification.
 
+## Database Initialization & Lifecycle
+
+**When:** Database is created on the first `optima_get_context` call, as part of the cold start bootstrap sequence (see `01_PRODUCT_SPEC_MVP.md` "Cold Start Bootstrap Sequence"). The MCP server process starts and listens on stdio immediately — database creation is deferred until first tool invocation.
+
+**Owner:** `src/db/connection.ts` exports a `getDatabase()` function that lazily initializes the connection. First call creates `.optima/` directory, opens/creates `optima.db`, and runs migrations. Subsequent calls return the cached connection. The tool handlers call `getDatabase()` — they never manage the connection directly.
+
+**Initialization steps (idempotent):**
+1. `fs.mkdirSync('.optima', { recursive: true })` — sync is acceptable here (one-time cold path, not hot path).
+2. Open `better-sqlite3` connection with `{ fileMustExist: false }`.
+3. Enable WAL mode: `PRAGMA journal_mode=WAL` — allows concurrent reads during writes, improves performance.
+4. Enable foreign keys: `PRAGMA foreign_keys=ON`.
+5. Check `schema_version` table. If missing or version < current, run migrations (see Schema Migration Strategy below).
+6. Write `.optima/.gitignore` with content `*` (if not already present).
+
+**Corruption recovery:** If the database file is corrupted (detected by `better-sqlite3` throwing `SqliteError` with code `SQLITE_CORRUPT` or `SQLITE_NOTADB` on open), delete `.optima/optima.db`, `.optima/optima.db-wal`, and `.optima/optima.db-shm`, then reinitialize from scratch. All data is rebuildable — the file index comes from disk, gotchas/rules are the only data loss, and that's acceptable for a local tool.
+
+**Concurrency:** `better-sqlite3` is synchronous and single-threaded — only one write can happen at a time within the process. If Claude Code sends two tool calls concurrently, the MCP SDK's stdio transport serializes them (stdio is a single message stream). There is no concurrent write contention within a single Optima process. If two separate Claude Code sessions point at the same project, SQLite's WAL mode handles reader/writer concurrency correctly, but two writers will serialize via SQLite's file-level lock.
+
 ## Drizzle Schema Definitions
 
 Copy these into `src/db/schema.ts` verbatim.
@@ -23,7 +41,7 @@ export const projectMeta = sqliteTable("project_meta", {
   testCommand: text("test_command"),
   lintCommand: text("lint_command"),
   projectPurpose: text("project_purpose"),
-  linterDetected: text("linter_detected"),
+  linterDetected: text("linter_detected"), // JSON array of strings, e.g. '["eslint","prettier"]'. Detected config files: eslint.config.*, .eslintrc.*, .prettierrc*, biome.json, ruff.toml, pyproject.toml [tool.ruff], .editorconfig. null if none detected.
   lastFullIndex: text("last_full_index"),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
 });
@@ -134,19 +152,11 @@ export interface GetContextOutput {
   recent_changes: string[];
 }
 
-export interface MemorizeInput {
-  type: "error_fix" | "architectural_rule" | "pattern" | "preference";
-  error?: string;
-  resolution?: string;
-  rule?: string;
-  rationale?: string;
-  pattern?: string;
-  example?: string;
-  preference?: string;
-  files?: string[];
-  directory?: string;
-  tags?: string[];
-}
+export type MemorizeInput =
+  | { type: "error_fix"; error: string; resolution: string; files?: string[]; directory?: string; tags?: string[] }
+  | { type: "architectural_rule"; rule: string; rationale?: string; files?: string[]; directory?: string; tags?: string[] }
+  | { type: "pattern"; pattern: string; example?: string; files?: string[]; directory?: string; tags?: string[] }
+  | { type: "preference"; preference: string; files?: string[]; directory?: string; tags?: string[] };
 
 export interface MemorizeOutput {
   stored: boolean;
@@ -251,6 +261,37 @@ export class OptimaError extends Error {
 - **Gotchas:** Keep all. `hit_count` tracks usefulness. `updated_at` is refreshed each time `hit_count` increments, making it usable as a "last hit" proxy for the necessity test filter during [CLAUDE.md](http://CLAUDE.md) generation (MVP: exclude gotchas where `hit_count = 0` AND `created_at` is older than 30 days).
 - **Rules:** Keep all. Manual pruning via future tooling.
 - **Generation log:** Keep last 50 entries per file path. Prune on database initialization.
+
+## Schema Migration Strategy
+
+Optima does NOT use Drizzle Kit's migration system at runtime. Migrations are hand-written SQL scripts executed programmatically by `src/db/migrations.ts`. This keeps the runtime dependency minimal and avoids requiring `drizzle-kit` as a production dependency.
+
+**Migration file convention:**
+```
+src/db/migrations/
+├── 001_initial.ts        # Creates all 7 tables
+├── 002_phase2_pruning.ts # Adds hit_count + pinned to rules (future)
+└── index.ts              # Exports ordered migration list
+```
+
+**Each migration file exports:**
+```typescript
+export const migration = {
+  version: 1,
+  description: "Initial schema — 7 tables",
+  up(db: Database): void {
+    // Raw SQL via db.exec()
+  },
+};
+```
+
+**Migration runner logic (in `src/db/migrations.ts`):**
+1. Create `schema_version` table if it doesn't exist.
+2. Query `SELECT MAX(version) FROM schema_version`.
+3. For each migration with `version > current`: run `up(db)` inside a transaction, then insert into `schema_version`.
+4. If any migration fails: rollback transaction, throw `OptimaError("SCHEMA_MIGRATION_FAILED")`.
+
+**Drizzle Kit is a dev-only tool.** Use `drizzle-kit` during development to generate migration SQL from schema changes (`bunx drizzle-kit generate`), then paste the SQL into a numbered migration file. Drizzle ORM is used at runtime for typed queries — Drizzle Kit is not.
 
 ## Phase 2 Schema Migration
 

@@ -26,6 +26,8 @@ export const GetContextInputSchema = z.object({
 export const GetContextOutputSchema = z.object({
   project: z.object({
     name: z.string(),
+    purpose: z.string().nullable(),
+    linter_detected: z.string().nullable(),
     tech_stack: z.array(z.string()),
     build_command: z.string().nullable(),
     test_command: z.string().nullable(),
@@ -135,9 +137,28 @@ export const ReindexOutputSchema = z.object({
 5. Files with newer mtimes: re-read content, recompute hash, re-extract entities via Tree-sitter, update `file_index` and `entities` tables.
 6. Files with matching mtimes: skip (index is fresh).
 7. Files in `file_index` that no longer exist on disk: delete from `file_index` (cascade deletes entities).
-8. Query `gotchas` table filtered by `directory` matching the requested path. Increment `hit_count` for returned gotchas.
-9. Query `rules` table filtered by `directory` matching the requested path (or `directory IS NULL` for project-wide rules).
-10. Assemble and return `GetContextOutput`.
+8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). Increment `hit_count` for returned gotchas. Update `updated_at` to current timestamp.
+9. Query `rules` table filtered by `directory` matching the requested path (see **Directory Scoping Precedence** below).
+10. Collect `recent_changes` — file paths re-indexed in steps 5-7, sorted by mtime descending, capped at 20 entries. Empty on cold start.
+11. Assemble and return `GetContextOutput`. (For `directory_context.description`, synthesize a concise summary of the directory's role, constructed by combining the project purpose with the directory's name, or parse a local `README.md` if present).
+
+**Gotcha Retrieval Strategy:**
+
+Gotchas are matched to the current context using TWO mechanisms:
+
+1. **Directory matching:** Return gotchas where `directory` matches or is a parent of the requested path, OR `directory IS NULL` (project-wide gotchas). Example: requesting path `src/api/auth/` returns gotchas scoped to `src/api/auth/`, `src/api/`, `src/`, and project-wide gotchas.
+2. **File matching:** Return gotchas where any entry in the `files` JSON array matches a file under the requested path.
+
+Results are deduplicated by gotcha `id` and sorted by `hit_count` descending. Capped at 10 entries returned per call (matching the CLAUDE.md instruction budget). All matching gotchas get their `hit_count` incremented, even if they exceed the cap (tracking is separate from display).
+
+**Directory Scoping Precedence:**
+
+When querying `rules` and `gotchas` by directory, apply hierarchical matching — a rule scoped to `src/api/` applies to `src/api/auth/login.ts`. The matching logic:
+
+1. Return all entries where `directory IS NULL` (project-wide).
+2. Return all entries where `directory` is an exact prefix of the requested path (after forward-slash normalization).
+3. Sort results: most specific directory first (longest `directory` path), then by `created_at` descending within the same scope.
+4. When the same topic has rules at multiple scopes, the most specific scope takes precedence in CLAUDE.md generation (e.g., a rule at `src/api/auth/` overrides a rule at `src/api/` if they cover the same subject).
 
 **Tree-sitter entity extraction (step 5):**
 
@@ -151,6 +172,20 @@ Parse TypeScript files using `tree-sitter-typescript`. Extract:
 - Top-level const/let declarations → kind: `"variable"`
 
 For each entity, capture: name, line range, signature (for functions: parameter list and return type), whether it’s exported, and JSDoc description if present.
+
+**Entity extraction edge cases:**
+
+- **Async functions:** Extract as kind `"function"`. The `signature` should include `async` prefix.
+- **Arrow functions assigned to const/let:** Extract as kind `"variable"`. If the arrow function has a name (via the variable), capture it. Signature is the parameter list.
+- **Default exports:** If `export default function foo()`, extract as kind `"function"` with `exported: true`. If `export default class Bar`, extract as kind `"class"` with `exported: true`. Anonymous default exports (`export default () => {}`) are skipped — no meaningful name to capture.
+- **Re-exports:** `export { foo } from ‘./bar’` — extract as kind `"export"` with name `foo`. Do NOT follow the import to resolve the original definition.
+- **Function overloads:** Extract only the implementation signature (not the overload declarations). One entity per overloaded function.
+- **Getter/setter pairs:** Extract each as kind `"function"` with name `get_propName` / `set_propName`. Two entities per pair.
+- **`declare` statements (ambient declarations):** Skip entirely. These describe external types and are not project entities.
+- **Namespace declarations:** Skip. Namespaces are a legacy pattern; their contents are typically re-exported.
+- **Generic types:** Extract normally. The `signature` field should include the generic parameter list (e.g., `<T extends Base>`).
+- **Union/intersection types:** Extract as kind `"type"`. No special handling needed — Tree-sitter gives us the full declaration.
+- **Enum declarations:** Extract as kind `"type"`. Enums are conceptually type definitions.
 
 Files that fail to parse (invalid syntax) should be indexed in `file_index` but produce zero entities. Log a warning, do not throw.
 
@@ -187,7 +222,7 @@ Note: Optima DOES index `.claude/settings.json`, `.claude/agents/`, `.claude/com
     - `architectural_rule`: Insert into `rules` table with `type = "architectural_rule"`.
     - `pattern`: Insert into `rules` table with `type = "pattern"`.
     - `preference`: Insert into `rules` table with `type = "preference"`.
-3. Generate a UUID for the `memory_id`.
+3. Generate a random UUID v4 for `memory_id`. This is a correlation ID for the caller to reference this memorize operation — it is NOT the database row's `id`. The UUID is generated fresh per call and is not stored in the database. It serves as a receipt: "your memorize call succeeded, here's a reference."
 4. Count total rows across `gotchas` + `rules` tables for `total_memories`.
 5. If the new entry is an `architectural_rule` and `directory` is null (project-wide), trigger [CLAUDE.md](http://CLAUDE.md) regeneration.
 6. Return `MemorizeOutput`.
@@ -197,14 +232,27 @@ Note: Optima DOES index `.claude/settings.json`, `.claude/agents/`, `.claude/com
 ```tsx
 function normalizeError(error: string): string {
   return error
+    // Strip Unix paths (/foo/bar.ts)
     .replace(/\/[\w\-./]+\.(ts|js|tsx|jsx)/g, "<file>")
+    // Strip Windows paths (C:\foo\bar.ts or C:/foo/bar.ts)
+    .replace(/[A-Z]:[\\\/][\w\-.\\/]+\.(ts|js|tsx|jsx)/gi, "<file>")
+    // Strip line:column references
     .replace(/:\d+:\d+/g, ":<line>")
+    // Strip ISO timestamps
     .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<time>")
+    // Strip memory addresses
     .replace(/0x[0-9a-f]+/gi, "<addr>")
+    // Strip UUIDs
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+    // Strip secrets, API keys, and tokens
+    .replace(/bearer\s+[\w\-.]+/gi, "<token>")
+    .replace(/[a-zA-Z0-9_-]{40,}/g, "<secret>")
     .trim()
     .toLowerCase();
 }
 ```
+
+**Important:** The normalization intentionally preserves the error *type* and *message structure*. Two errors like "cannot find module 'foo'" and "cannot find module 'bar'" will normalize to the same hash — this is correct behavior. They represent the same *class* of error. The raw `error_text` (stored verbatim) preserves the specifics. **Security warning:** The raw `error_text` must also have sensitive secrets (like API keys, JWTs, and long hash strings) redacted before storage in the database to prevent accidental token leaks in `CLAUDE.md`. Apply a scrubbing pass against the raw error before creating the `gotchas` record.
 
 ---
 
@@ -235,3 +283,20 @@ Every error thrown by Optima must use `OptimaError` with one of these codes:
 | `GENERATION_FAILED` | [CLAUDE.md](http://CLAUDE.md) or rules file generation fails | Recoverable |
 | `HASH_COLLISION` | Two different errors produce same normalized hash | Warn and store both |
 | `SCHEMA_MIGRATION_FAILED` | Database schema upgrade fails | Critical |
+
+**Error severity behavior:**
+- **Recoverable:** Return an MCP error response with `isError: true` and a human-readable message containing the error code. The MCP server process stays alive.
+- **Critical:** Return an MCP error response. If `DB_ERROR` or `SCHEMA_MIGRATION_FAILED`, the server may be in an unusable state — subsequent calls will likely fail until the database issue is resolved (e.g., delete and recreate).
+- **Warn (HASH_COLLISION only):** Store both entries, return success, but include a `warnings` field in internal logs.
+
+---
+
+## File System Edge Cases
+
+- **Symlinks:** Skip. `fs.lstat` is used instead of `fs.stat` to detect symlinks without following them. If `isSymbolicLink()`, skip the file silently.
+- **Permission errors:** If `fs.stat` or `fs.readFile` throws `EACCES` or `EPERM`, skip the file, log a warning. Do not throw `INDEX_FAILED` for a single inaccessible file.
+- **File deleted between stat and read:** If `fs.readFile` throws `ENOENT` after a successful `fs.stat`, skip the file. The next index cycle will clean up the stale `file_index` entry.
+- **Empty directories:** Ignored. Only files are indexed.
+- **Binary files:** Detect by checking if the file extension is in a known set of non-text extensions (`.png`, `.jpg`, `.gif`, `.ico`, `.woff`, `.woff2`, `.ttf`, `.eot`, `.mp3`, `.mp4`, `.zip`, `.tar`, `.gz`, `.pdf`, `.exe`, `.dll`, `.so`, `.dylib`). Skip binary files — do not attempt to read or hash them. If an unknown extension is encountered, read the first 512 bytes and check for null bytes (`\x00`) — if found, treat as binary and skip.
+- **Large files:** Files exceeding 1MB are indexed in `file_index` (path, mtime, size, hash) but skipped for Tree-sitter entity extraction. The hash is computed, but parsing multi-MB files is too slow for the performance budget.
+- **Empty files:** Indexed in `file_index` with a fixed hash (SHA-256 of empty string). Zero entities extracted.

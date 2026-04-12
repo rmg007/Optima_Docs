@@ -26,6 +26,7 @@ An MCP server that indexes your project, remembers what errors you've hit and ho
 | Database | SQLite via `better-sqlite3` | Single file at `.optima/optima.db`. Uses better-sqlite3 for runtime portability (works on both Bun and Node). See resolved Q6. |
 | ORM | Drizzle ORM (`drizzle-orm`  • `drizzle-kit`) | Typed queries. SQLite dialect. |
 | AST Parsing | `tree-sitter`  • `tree-sitter-typescript` | For entity extraction. |
+| Gitignore Parsing | `ignore` (npm, ^7.0.0) | Correct gitignore semantics. Not hand-rolled regex (resolved Q5). |
 | Bundler | `tsup` | Single entry point bundle. |
 | Test Runner | Vitest | `bun run test` via vitest. |
 
@@ -34,9 +35,10 @@ An MCP server that indexes your project, remembers what errors you've hit and ho
 1. **No file exceeds 300 lines.** Split into separate modules if approaching the limit.
 2. **Copy verbatim.** When a spec provides a fenced TypeScript, SQL, or Zod block, reproduce it byte-for-byte. Do not rename fields, reorder properties, or add fields.
 3. **All cross-module inputs validated with Zod.** No exceptions.
-4. **All file I/O must be async.** Never use synchronous fs methods in the hot path.
+4. **All file I/O must be async.** Never use synchronous fs methods in the hot path. (Exception: `better-sqlite3` database queries are intentionally synchronous by design).
 5. **Tests are mandatory.** Every module ships with tests. Minimum 80% coverage.
 6. **Errors use a closed taxonomy.** Every thrown error must use one of the error codes defined in `03_MCP_TOOL_CONTRACTS.md`. Never throw bare `new Error('...')`.
+7. **Paths are always forward-slash normalized.** All file paths stored in SQLite and returned in tool outputs use forward slashes (`src/utils/foo.ts`), regardless of OS. Normalize on ingestion using `path.replace(/\\/g, '/')`. Symlinks are NOT followed — if `fs.lstat` reports a symlink, skip the file silently. This avoids infinite loops and ensures deterministic indexing.
 
 ## Claude Code State Awareness
 

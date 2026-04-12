@@ -244,7 +244,7 @@ Optima must understand Claude Code's state architecture to operate safely alongs
 
 ## 14. Open Questions — ALL RESOLVED
 
-**All 11 questions resolved on April 12, 2026. These are now binding design decisions.**
+**All 16 questions resolved on April 12, 2026. These are now binding design decisions.**
 
 **Additional questions (from Claude Code state architecture review):**
 
@@ -262,3 +262,8 @@ Optima must understand Claude Code's state architecture to operate safely alongs
 | Q7 ✅ | Domain detection for agent generation? | **Dependency analysis + directory naming, require both signals.** React/Vue/Svelte in deps → frontend domain. Express/FastAPI/Hono in deps → API domain. Drizzle/Prisma/TypeORM → database domain. Cross-reference with directory structure (`src/components/` → frontend, `src/api/` → API, `src/db/` → database). Require signals from BOTH deps and dirs before generating a domain agent. One signal alone is not enough. Phase 2 only. |
 | Q8 ✅ | Agent `allowedTools` restrictions? | **YES — explicit allowlists per agent.** `deep-architect.md` → `Read, Grep, Glob` (read-only, thinks not edits). `quick-fix.md` → `Read, Edit, Write, Bash` (acts). `reviewer.md` → `Read, Grep, Glob, Bash` (reads + runs tests, no edits). Follows principle of least privilege. Phase 2 only. |
 | Q9 ✅ | Token budget measurement? | **Character count ÷ 4.** Exact tokenization requires a tokenizer library — too slow and adds a dependency for minimal accuracy gain. 4000 token budget ≈ 16,000 chars. Allocate proportionally (40% gotchas, 30% rules, 20% entities, 10% recent changes), truncate each section at its char limit. 10% overshoot is acceptable. Phase 2 only. |
+| Q12 ✅ | Database initialization timing? | **Lazy on first tool call.** The MCP server process starts immediately and listens on stdio. Database creation is deferred until the first `optima_get_context` call. `getDatabase()` in `connection.ts` handles lazy init with caching. See `02_DATA_MODEL_AND_SCHEMA.md` "Database Initialization & Lifecycle". |
+| Q13 ✅ | Path normalization across OS? | **Always forward slashes.** All paths stored in SQLite use `/` separators regardless of OS. Normalize on ingestion. Symlinks are skipped (not followed). See `00_START_HERE.md` Ground Rule 7. |
+| Q14 ✅ | Gotcha retrieval matching strategy? | **Hierarchical directory match + file array match.** Gotchas are retrieved by matching the requested path against the `directory` column (parent prefix match) and `files` array (any file under the path). NOT semantic similarity — no embedding model in MVP. See `03_MCP_TOOL_CONTRACTS.md` "Gotcha Retrieval Strategy". |
+| Q15 ✅ | `linterDetected` storage format? | **JSON array of strings.** e.g., `'["eslint","prettier"]'`. Detected by config file presence (eslint.config.*, .prettierrc*, biome.json, etc.). `null` if none detected. |
+| Q16 ✅ | Schema migration strategy? | **Hand-written SQL migrations, not Drizzle Kit at runtime.** Numbered migration files in `src/db/migrations/`, executed programmatically. Drizzle Kit is dev-only. See `02_DATA_MODEL_AND_SCHEMA.md` "Schema Migration Strategy". |

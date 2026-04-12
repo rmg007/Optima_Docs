@@ -4,6 +4,35 @@
 
 Optima is an MCP server for Claude Code. It runs locally via Stdio transport, analyzes the developer’s project, remembers solutions to errors, and maintains intelligence files (`CLAUDE.md`, `.claude/rules/`) that make Claude Code smarter with every session.
 
+## MCP Configuration
+
+Developer configures Optima once. Add to `.mcp.json` at the project root (team-shared) or `~/.claude.json` (personal, cross-project):
+
+```json
+{
+  "mcpServers": {
+    "optima": {
+      "command": "bunx",
+      "args": ["optima-mcp"],
+      "env": {}
+    }
+  }
+}
+```
+
+If Bun's MCP spawner has issues (resolved Q6), fall back to:
+
+```json
+{
+  "mcpServers": {
+    "optima": {
+      "command": "npx",
+      "args": ["-y", "optima-mcp"]
+    }
+  }
+}
+```
+
 ## How It Works
 
 1. Developer configures Optima once in `.mcp.json` (or `~/.claude.json` globally).
@@ -23,7 +52,27 @@ Optima is an MCP server for Claude Code. It runs locally via Stdio transport, an
 MCP servers cannot passively observe Claude Code conversations. They only activate when called. Optima solves this by generating `.claude/rules/optima-feedback.md` — a rules file that instructs Claude Code when and how to call Optima’s tools. Optima writes the instructions that teach its consumer how to feed it data. The intelligence layer bootstraps its own feedback loop.
 
 > **Design note:** Rules are advisory (the LLM decides whether to follow them). Claude Code also supports deterministic **hooks** in `.claude/settings.json` that fire automatically at lifecycle points (`PostToolUse`, `TaskCompleted`, etc.). For MVP, rules are sufficient and simpler. Phase 2 adds hook-based automation as a dual-layer enhancement.
-> 
+
+### Cold Start Bootstrap Sequence
+
+The inception pattern has an apparent circular dependency: Claude Code needs the rules file to know to call Optima, but Optima needs a tool call to generate the rules file. Here is how the bootstrap resolves:
+
+1. **Developer configures `.mcp.json`** → Claude Code connects to Optima on next session start.
+2. **First session:** Claude Code discovers Optima’s tools via MCP Tool Search. The tool description for `optima_get_context` ("Get project context, code entities, known errors...") semantically matches most development tasks. Claude Code loads the tool and calls it.
+3. **First `optima_get_context` call triggers full cold start:**
+   - a. Create `.optima/` directory if it doesn’t exist.
+   - b. Create and open `.optima/optima.db`. Run schema migrations (idempotent — checks `schema_version` table).
+   - c. Run full project analysis (tech stack, commands, purpose detection).
+   - d. Run full file walk + Tree-sitter entity extraction.
+   - e. Generate `.claude/rules/optima-feedback.md` (the inception payload).
+   - f. Generate `CLAUDE.md` with initial Optima sections.
+   - g. Append `.optima/` to `.gitignore`.
+   - h. Return `GetContextOutput` with full project context.
+4. **Same session continues** using the returned context. The feedback rules file exists but Claude Code won’t re-read `.claude/rules/` mid-session — rules are loaded at session start.
+5. **Second session onward:** Claude Code reads `.claude/rules/optima-feedback.md` at session start. The rules instruct it to call `optima_get_context` at task start and `optima_memorize` after fixes. The feedback loop is now self-sustaining.
+
+> **Key insight:** The bootstrap doesn’t require the rules file to exist before the first call. Claude Code’s Tool Search discovers `optima_get_context` based on its description. The rules file ensures consistent behavior from session 2 onward.
+
 
 ## Lazy Indexing Lifecycle
 
@@ -36,6 +85,10 @@ Indexing is NOT exposed as a tool Claude Code calls explicitly. It happens inter
 5. Context is assembled from the fresh index and returned.
 
 The only exception is `optima_reindex` — a manual escape hatch for full project re-indexing after cloning, branch switching, or major restructuring.
+
+### Recent Changes Detection
+
+`GetContextOutput.recent_changes` returns file paths that were re-indexed during the current `optima_get_context` call (i.e., files whose mtime changed since last index). These are the files Optima just updated in `file_index` during step 3-5 of the lazy indexing flow. Sorted by mtime descending (most recently modified first). Capped at 20 entries. On cold start (no prior index), this list is empty — the entire project is new, so "recent changes" is meaningless.
 
 ## MVP Tool Surface
 
