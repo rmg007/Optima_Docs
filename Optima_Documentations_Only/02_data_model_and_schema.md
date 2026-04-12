@@ -1,26 +1,24 @@
 # 02 Data Model and Schema
 
-All data lives in ONE SQLite database: `.optima/optima.db` at the project root.
+All data lives in ONE SQLite database: `.opticode/opticode.db` at the project root.
 
-**SQLite driver:** `better-sqlite3` (not `bun:sqlite`) for runtime portability — works on both Bun and Node.js. See resolved Q6 in Product Specification.
+**SQLite driver:** `better-sqlite3` for runtime portability — works on both Bun and Node.js.
 
 ## Database Initialization & Lifecycle
 
-**When:** Database is created on the first `optima_get_context` call, as part of the cold start bootstrap sequence (see `01_PRODUCT_SPEC_MVP.md` "Cold Start Bootstrap Sequence"). The MCP server process starts and listens on stdio immediately — database creation is deferred until first tool invocation.
+**When:** Database is created when the `ContextBuilder` triggers the lazy indexing layer during the first interaction with the agent loop.
 
-**Owner:** `src/db/connection.ts` exports a `getDatabase()` function that lazily initializes the connection. First call creates `.optima/` directory, opens/creates `optima.db`, and runs migrations. Subsequent calls return the cached connection. The tool handlers call `getDatabase()` — they never manage the connection directly.
+**Owner:** `src/db/connection.ts` exports a `getDatabase()` function that lazily initializes the connection. First call creates `.opticode/` directory, opens/creates `opticode.db`, and runs migrations. Subsequent calls return the cached connection.
 
 **Initialization steps (idempotent):**
-1. `fs.mkdirSync('.optima', { recursive: true })` — sync is acceptable here (one-time cold path, not hot path).
+1. `fs.mkdirSync('.opticode', { recursive: true })` — sync is acceptable here (one-time cold path, not hot path).
 2. Open `better-sqlite3` connection with `{ fileMustExist: false }`.
 3. Enable WAL mode: `PRAGMA journal_mode=WAL` — allows concurrent reads during writes, improves performance.
 4. Enable foreign keys: `PRAGMA foreign_keys=ON`.
 5. Check `schema_version` table. If missing or version < current, run migrations (see Schema Migration Strategy below).
-6. Write `.optima/.gitignore` with content `*` (if not already present).
+6. Write `.opticode/.gitignore` with content `*` (if not already present).
 
-**Corruption recovery:** If the database file is corrupted (detected by `better-sqlite3` throwing `SqliteError` with code `SQLITE_CORRUPT` or `SQLITE_NOTADB` on open), delete `.optima/optima.db`, `.optima/optima.db-wal`, and `.optima/optima.db-shm`, then reinitialize from scratch. All data is rebuildable — the file index comes from disk, gotchas/rules are the only data loss, and that's acceptable for a local tool.
-
-**Concurrency:** `better-sqlite3` is synchronous and single-threaded — only one write can happen at a time within the process. If Claude Code sends two tool calls concurrently, the MCP SDK's stdio transport serializes them (stdio is a single message stream). There is no concurrent write contention within a single Optima process. If two separate Claude Code sessions point at the same project, SQLite's WAL mode handles reader/writer concurrency correctly, but two writers will serialize via SQLite's file-level lock.
+**Corruption recovery:** If the database file is corrupted (detected by `better-sqlite3` throwing `SqliteError` with code `SQLITE_CORRUPT` or `SQLITE_NOTADB` on open), delete `.opticode/opticode.db`, `.opticode/opticode.db-wal`, and `.opticode/opticode.db-shm`, then reinitialize from scratch.
 
 ## Drizzle Schema Definitions
 
@@ -41,7 +39,7 @@ export const projectMeta = sqliteTable("project_meta", {
   testCommand: text("test_command"),
   lintCommand: text("lint_command"),
   projectPurpose: text("project_purpose"),
-  linterDetected: text("linter_detected"), // JSON array of strings, e.g. '["eslint","prettier"]'. Detected config files: eslint.config.*, .eslintrc.*, .prettierrc*, biome.json, ruff.toml, pyproject.toml [tool.ruff], .editorconfig. null if none detected.
+  linterDetected: text("linter_detected"), // JSON array of strings
   lastFullIndex: text("last_full_index"),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
 });
@@ -134,46 +132,93 @@ export const schemaVersion = sqliteTable("schema_version", {
 
 ## TypeScript Interfaces
 
-Copy into `src/types.ts` verbatim.
+Copy into `src/types.ts` (or relevant directory) verbatim.
 
 ```tsx
-// ── Tool Input/Output Types ─────────────────────────────────────
+// ── WebSocket Protocol Types ────────────────────────────────────
 
-export interface GetContextInput {
-  path: string;
-  task_type?: "bug_fix" | "feature" | "refactor" | "test" | "review";
+export interface UserMessage {
+  type: "user_message";
+  content: string;
 }
 
-export interface GetContextOutput {
-  project: ProjectSummary;
-  directory_context: DirectoryContext;
-  gotchas: GotchaEntry[];
-  architectural_rules: RuleEntry[];
-  recent_changes: string[];
+export interface AssistantChunk {
+  type: "assistant_chunk";
+  content: string;
 }
 
-export type MemorizeInput =
-  | { type: "error_fix"; error: string; resolution: string; files?: string[]; directory?: string; tags?: string[] }
-  | { type: "architectural_rule"; rule: string; rationale?: string; files?: string[]; directory?: string; tags?: string[] }
-  | { type: "pattern"; pattern: string; example?: string; files?: string[]; directory?: string; tags?: string[] }
-  | { type: "preference"; preference: string; files?: string[]; directory?: string; tags?: string[] };
-
-export interface MemorizeOutput {
-  stored: boolean;
-  memory_id: string;
-  total_memories: number;
+export interface ToolCallMessage {
+  type: "tool_call";
+  id: string;
+  name: string;
+  input: any;
 }
 
-export interface ReindexInput {
-  path?: string;
-  reason?: string;
+export interface ToolResultMessage {
+  type: "tool_result";
+  id: string;
+  result: ToolResult;
 }
 
-export interface ReindexOutput {
-  files_indexed: number;
-  entities_found: number;
-  duration_ms: number;
+export interface PermissionRequest {
+  type: "permission_request";
+  id: string;
+  tool: string;
+  input: any;
 }
+
+export interface PermissionResponse {
+  type: "permission_response";
+  id: string;
+  approved: boolean;
+}
+
+// ── Agent Loop Types ────────────────────────────────────────────
+
+export enum ModelTier {
+  Haiku = "claude-3-haiku",
+  Sonnet = "claude-3-5-sonnet",
+  Opus = "claude-3-opus",
+}
+
+export interface RouterDecision {
+  model: ModelTier;
+  reasoning: string;
+}
+
+export interface SessionState {
+  sessionId: string;
+  messages: any[]; // Anthropic MessageParams
+  memory: {
+    touchedFiles: Set<string>;
+    gotchasLearned: number;
+  };
+}
+
+// ── Tool Executor Types ─────────────────────────────────────────
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  input_schema: any; // JSON Schema
+}
+
+export type ToolResult = 
+  | ReadFileResult
+  | WriteFileResult
+  | EditFileResult
+  | BashResult
+  | GrepResult
+  | GlobResult
+  | ListFilesResult;
+
+export interface ReadFileResult { type: "read_file"; content: string; }
+export interface WriteFileResult { type: "write_file"; success: boolean; path: string; }
+export interface EditFileResult { type: "edit_file"; success: boolean; path: string; }
+export interface BashResult { type: "bash"; stdout: string; stderr: string; exitCode: number; }
+export interface GrepResult { type: "grep"; matches: string[]; }
+export interface GlobResult { type: "glob"; files: string[]; }
+export interface ListFilesResult { type: "list_files"; entries: string[]; }
 
 // ── Internal Types ────────────────────────────────────────────
 
@@ -230,7 +275,7 @@ export interface FileState {
 
 // ── Error Types ───────────────────────────────────────────────
 
-export type OptimaErrorCode =
+export type OptiCodeErrorCode =
   | "INDEX_FAILED"
   | "PARSE_FAILED"
   | "DB_ERROR"
@@ -240,14 +285,14 @@ export type OptimaErrorCode =
   | "HASH_COLLISION"
   | "SCHEMA_MIGRATION_FAILED";
 
-export class OptimaError extends Error {
+export class OptiCodeError extends Error {
   constructor(
-    public readonly code: OptimaErrorCode,
+    public readonly code: OptiCodeErrorCode,
     message: string,
     public readonly cause?: unknown,
   ) {
     super(`[${code}] ${message}`);
-    this.name = "OptimaError";
+    this.name = "OptiCodeError";
   }
 }
 ```
@@ -256,15 +301,15 @@ export class OptimaError extends Error {
 
 ## Retention Policy
 
-- **File index:** No limit. Rows deleted when files are deleted from disk (detected during re-index).
+- **File index:** No limit. Rows deleted when files are deleted from disk.
 - **Entities:** Cascade-deleted with their parent file_index row.
-- **Gotchas:** Keep all. `hit_count` tracks usefulness. `updated_at` is refreshed each time `hit_count` increments, making it usable as a "last hit" proxy for the necessity test filter during [CLAUDE.md](http://CLAUDE.md) generation (MVP: exclude gotchas where `hit_count = 0` AND `created_at` is older than 30 days).
+- **Gotchas:** Keep all. `hit_count` tracks usefulness. `updated_at` is refreshed each time `hit_count` increments.
 - **Rules:** Keep all. Manual pruning via future tooling.
 - **Generation log:** Keep last 50 entries per file path. Prune on database initialization.
 
 ## Schema Migration Strategy
 
-Optima does NOT use Drizzle Kit's migration system at runtime. Migrations are hand-written SQL scripts executed programmatically by `src/db/migrations.ts`. This keeps the runtime dependency minimal and avoids requiring `drizzle-kit` as a production dependency.
+OptiCode does NOT use Drizzle Kit's migration system at runtime. Migrations are hand-written SQL scripts executed programmatically by `src/db/migrations.ts`.
 
 **Migration file convention:**
 ```
@@ -274,30 +319,8 @@ src/db/migrations/
 └── index.ts              # Exports ordered migration list
 ```
 
-**Each migration file exports:**
-```typescript
-export const migration = {
-  version: 1,
-  description: "Initial schema — 7 tables",
-  up(db: Database): void {
-    // Raw SQL via db.exec()
-  },
-};
-```
-
 **Migration runner logic (in `src/db/migrations.ts`):**
 1. Create `schema_version` table if it doesn't exist.
 2. Query `SELECT MAX(version) FROM schema_version`.
 3. For each migration with `version > current`: run `up(db)` inside a transaction, then insert into `schema_version`.
-4. If any migration fails: rollback transaction, throw `OptimaError("SCHEMA_MIGRATION_FAILED")`.
-
-**Drizzle Kit is a dev-only tool.** Use `drizzle-kit` during development to generate migration SQL from schema changes (`bunx drizzle-kit generate`), then paste the SQL into a numbered migration file. Drizzle ORM is used at runtime for typed queries — Drizzle Kit is not.
-
-## Phase 2 Schema Migration
-
-Phase 2 automated pruning (see Product Spec section 10.4) requires two new columns:
-
-- `rules.hit_count` (INTEGER, default 0) — tracks how often a rule was referenced in `optima_get_context` output
-- `rules.pinned` (INTEGER/BOOLEAN, default false) — developer override to prevent automatic pruning
-
-These are additive columns with defaults, so the migration is non-breaking. Add via Drizzle migration when Phase 2 begins.
+4. If any migration fails: rollback transaction, throw `OptiCodeError("SCHEMA_MIGRATION_FAILED")`.
