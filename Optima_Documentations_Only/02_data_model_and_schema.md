@@ -219,6 +219,100 @@ Always add `"bun"` if the project uses Optima (Optima runs on Bun).
 
 **Extensibility:** This dictionary is intentionally limited to the most common stacks. An agent implementing this should use exact string matching (not fuzzy). Unknown dependencies are ignored — better to have a short accurate list than a noisy one. Phase 2 can expand with more granular detection.
 
+### Tech stack detection implementation
+
+```typescript
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { existsSync } from "node:fs";
+
+const DEPENDENCY_MAP: Record<string, string> = {
+  typescript: "typescript",
+  react: "react",
+  next: "next.js",
+  vue: "vue",
+  svelte: "svelte",
+  "@angular/core": "angular",
+  express: "express",
+  fastify: "fastify",
+  hono: "hono",
+  "drizzle-orm": "drizzle",
+  prisma: "prisma",
+  vitest: "vitest",
+  jest: "jest",
+  tailwindcss: "tailwind",
+  "@modelcontextprotocol/sdk": "mcp",
+};
+
+const CONFIG_SIGNALS: Record<string, string> = {
+  "tsconfig.json": "typescript",
+  "pyproject.toml": "python",
+  "Cargo.toml": "rust",
+  "go.mod": "go",
+  "Gemfile": "ruby",
+  "pom.xml": "java",
+  "build.gradle": "java",
+};
+
+export async function detectTechStack(projectRoot: string): Promise<string[]> {
+  const labels = new Set<string>();
+
+  // 1. Scan package.json dependencies
+  try {
+    const pkg = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf-8"));
+    const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+    for (const depName of Object.keys(allDeps)) {
+      for (const [pattern, label] of Object.entries(DEPENDENCY_MAP)) {
+        if (depName === pattern || depName.includes(pattern)) {
+          labels.add(label);
+        }
+      }
+    }
+  } catch { /* no package.json */ }
+
+  // 2. Check config file signals
+  for (const [file, label] of Object.entries(CONFIG_SIGNALS)) {
+    if (existsSync(join(projectRoot, file))) {
+      labels.add(label);
+    }
+  }
+
+  // 3. Always add "bun" (Optima runs on Bun)
+  labels.add("bun");
+
+  return [...labels].sort();
+}
+```
+
+### Command detection implementation
+
+```typescript
+export interface DetectedCommands {
+  build: string | null;
+  test: string | null;
+  lint: string | null;
+}
+
+export async function detectCommands(projectRoot: string): Promise<DetectedCommands> {
+  const result: DetectedCommands = { build: null, test: null, lint: null };
+
+  try {
+    const pkg = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf-8"));
+    const scripts = pkg.scripts ?? {};
+
+    if (scripts.build) result.build = "bun run build";
+    if (scripts.test) result.test = "bun run test";
+    if (scripts.lint) result.lint = "bun run lint";
+
+    // Fallbacks: check for common patterns
+    if (!result.test && scripts["test:run"]) result.test = "bun run test:run";
+    if (!result.lint && scripts.check) result.lint = "bun run check";
+  } catch { /* no package.json */ }
+
+  return result;
+}
+```
+
 ---
 
 ## TypeScript Interfaces

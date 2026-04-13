@@ -30,6 +30,134 @@ An MCP server that indexes your project, remembers what errors you've hit and ho
 | Bundler | `tsup` | Single entry point bundle. |
 | Test Runner | Vitest | `bun run test` via vitest. |
 
+## Project Configuration Files
+
+Copy these configuration files verbatim when bootstrapping the project.
+
+### `package.json`
+
+```json
+{
+  "name": "optima-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "optima-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "bun run src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "better-sqlite3": "^11.7.0",
+    "drizzle-orm": "^0.39.0",
+    "ignore": "^7.0.0",
+    "tree-sitter": "^0.22.0",
+    "tree-sitter-typescript": "^0.23.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "drizzle-kit": "^0.30.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
+```
+
+### `tsconfig.json`
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "declaration": true,
+    "sourceMap": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "test"]
+}
+```
+
+### `tsup.config.ts`
+
+```typescript
+import { defineConfig } from "tsup";
+
+export default defineConfig({
+  entry: ["src/index.ts"],
+  format: ["esm"],
+  target: "node20",
+  outDir: "dist",
+  clean: true,
+  dts: true,
+  sourcemap: true,
+  banner: { js: "#!/usr/bin/env node" },
+  external: ["better-sqlite3", "tree-sitter", "tree-sitter-typescript"],
+});
+```
+
+### `vitest.config.ts`
+
+```typescript
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    globals: true,
+    include: ["test/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.ts"],
+      exclude: ["src/index.ts"],
+      thresholds: { lines: 80, functions: 80, branches: 70 },
+    },
+  },
+});
+```
+
+### `drizzle.config.ts` (dev-only — NOT used at runtime)
+
+```typescript
+import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  schema: "./src/db/schema.ts",
+  out: "./drizzle",
+  dialect: "sqlite",
+  dbCredentials: { url: ".optima/optima.db" },
+});
+```
+
+### Project bootstrap commands
+
+```bash
+bun init -y
+bun add @modelcontextprotocol/sdk better-sqlite3 drizzle-orm ignore tree-sitter tree-sitter-typescript zod
+bun add -d @types/better-sqlite3 drizzle-kit tsup typescript vitest
+```
+
+---
+
 ## Ground Rules
 
 1. **No file exceeds 300 lines.** Split into separate modules if approaching the limit.

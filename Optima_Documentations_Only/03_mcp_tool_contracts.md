@@ -20,15 +20,198 @@ Claude Code uses Tool Search (semantic matching on tool names and descriptions) 
 | `optima_memorize` | `"optima_memorize"` | `"Store knowledge learned during this session: error fixes, architectural decisions, code patterns, or developer preferences. Call after fixing bugs, making design decisions, or establishing conventions."` |
 | `optima_reindex` | `"optima_reindex"` | `"Force a full project re-index. Use after git clone, branch switch, large merge, or when the index seems stale. Rarely needed — normal indexing is automatic."` |
 
-**Registration example (in `src/server.ts`):**
-```tsx
-server.tool(
-  "optima_get_context",
-  "Get project context, code structure, known errors and fixes, architectural rules, and recent changes for a directory. Lazily re-indexes changed files. Call at the start of any coding task.",
-  GetContextInputSchema.shape,
-  async (params) => { /* handler */ }
+## MCP Server Bootstrap (`src/index.ts` and `src/server.ts`)
+
+Copy these files verbatim. They form the entry point and tool registration layer.
+
+### `src/index.ts` — Entry point
+
+```typescript
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { registerTools } from "./server.js";
+
+const server = new Server(
+  { name: "optima", version: "0.1.0" },
+  { capabilities: { tools: {} } },
 );
+
+registerTools(server);
+
+const transport = new StdioServerTransport();
+
+// Graceful shutdown: close DB connection, flush writes
+async function shutdown(): Promise<void> {
+  try {
+    // Import lazily — connection may not exist if no tool was ever called
+    const { closeDatabase } = await import("./db/connection.js");
+    closeDatabase();
+  } catch { /* DB was never opened — fine */ }
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGHUP", shutdown);
+
+// Prevent unhandled rejections from crashing the server
+process.on("unhandledRejection", (reason) => {
+  console.error("[optima] Unhandled rejection:", reason);
+  // Don't exit — the MCP server should stay alive for future tool calls
+});
+
+await server.connect(transport);
 ```
+
+### `src/server.ts` — Tool registration
+
+```typescript
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { GetContextInputSchema, GetContextOutputSchema } from "./schemas.js";
+import { MemorizeInputSchema, MemorizeOutputSchema } from "./schemas.js";
+import { ReindexInputSchema, ReindexOutputSchema } from "./schemas.js";
+import { handleGetContext } from "./tools/get-context.js";
+import { handleMemorize } from "./tools/memorize.js";
+import { handleReindex } from "./tools/reindex.js";
+import { OptimaError } from "./types.js";
+
+export function registerTools(server: Server): void {
+  server.tool(
+    "optima_get_context",
+    "Get project context, code structure, known errors and fixes, architectural rules, and recent changes for a directory. Lazily re-indexes changed files. Call at the start of any coding task.",
+    GetContextInputSchema.shape,
+    async (params) => {
+      try {
+        const result = await handleGetContext(params);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (error) {
+        return wrapError(error);
+      }
+    },
+  );
+
+  server.tool(
+    "optima_memorize",
+    "Store knowledge learned during this session: error fixes, architectural decisions, code patterns, or developer preferences. Call after fixing bugs, making design decisions, or establishing conventions.",
+    MemorizeInputSchema.shape,
+    async (params) => {
+      try {
+        const result = await handleMemorize(params);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (error) {
+        return wrapError(error);
+      }
+    },
+  );
+
+  server.tool(
+    "optima_reindex",
+    "Force a full project re-index. Use after git clone, branch switch, large merge, or when the index seems stale. Rarely needed — normal indexing is automatic.",
+    ReindexInputSchema.shape,
+    async (params) => {
+      try {
+        const result = await handleReindex(params);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (error) {
+        return wrapError(error);
+      }
+    },
+  );
+}
+
+/** Wraps OptimaError (or unknown errors) into MCP error responses. */
+function wrapError(error: unknown): { content: Array<{ type: "text"; text: string }>; isError: true } {
+  if (error instanceof OptimaError) {
+    return {
+      content: [{ type: "text", text: `[${error.code}] ${error.message}` }],
+      isError: true,
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    content: [{ type: "text", text: `[UNKNOWN_ERROR] ${message}` }],
+    isError: true,
+  };
+}
+```
+
+### `src/db/connection.ts` — Database lifecycle
+
+```typescript
+import Database from "better-sqlite3";
+import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { runMigrations } from "./migrations.js";
+import { OptimaError } from "../types.js";
+
+let db: Database.Database | null = null;
+let projectRoot: string | null = null;
+
+/** Returns the project root path. Resolves from cwd on first call. */
+export function getProjectRoot(): string {
+  if (!projectRoot) {
+    projectRoot = process.cwd();
+  }
+  return projectRoot;
+}
+
+/** Lazily initializes the database. First call creates .optima/ and runs migrations. */
+export function getDatabase(): Database.Database {
+  if (db) return db;
+
+  const root = getProjectRoot();
+  const dbDir = join(root, ".optima");
+  const dbPath = join(dbDir, "optima.db");
+
+  // Step 1: Create directory
+  mkdirSync(dbDir, { recursive: true });
+
+  // Step 2: Open connection
+  try {
+    db = new Database(dbPath);
+  } catch (error: unknown) {
+    // Corruption detection
+    if (error instanceof Error && /SQLITE_CORRUPT|SQLITE_NOTADB/.test(error.message)) {
+      const { unlinkSync } = require("node:fs");
+      try { unlinkSync(dbPath); } catch {}
+      try { unlinkSync(dbPath + "-wal"); } catch {}
+      try { unlinkSync(dbPath + "-shm"); } catch {}
+      db = new Database(dbPath);
+    } else {
+      throw new OptimaError("DB_ERROR", `Failed to open database: ${String(error)}`, error);
+    }
+  }
+
+  // Step 3-4: Enable WAL and foreign keys
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+
+  // Step 5: Run migrations
+  try {
+    runMigrations(db);
+  } catch (error) {
+    throw new OptimaError("SCHEMA_MIGRATION_FAILED", String(error), error);
+  }
+
+  // Step 6: Write inner .gitignore
+  const innerGitignore = join(dbDir, ".gitignore");
+  if (!existsSync(innerGitignore)) {
+    writeFileSync(innerGitignore, "*\n");
+  }
+
+  return db;
+}
+
+/** Close the database connection (called during shutdown). */
+export function closeDatabase(): void {
+  if (db) {
+    db.close();
+    db = null;
+  }
+}
+```
+
+---
 
 ## Zod Schemas
 
@@ -211,83 +394,339 @@ For each entity, capture: name, line range, signature (for functions: parameter 
 - **Union/intersection types:** Extract as kind `"type"`. No special handling needed — Tree-sitter gives us the full declaration.
 - **Enum declarations:** Extract as kind `"type"`. Enums are conceptually type definitions.
 
-**Tree-sitter query patterns (TypeScript):**
+**Tree-sitter entity extraction implementation (`src/indexer/entity-extractor.ts`):**
 
-Use the `tree-sitter-typescript` parser with these S-expression queries to extract entities. These are the minimal viable queries — adapt field names to exact tree-sitter-typescript grammar node types.
+Copy this module verbatim. It uses the `tree-sitter` and `tree-sitter-typescript` packages with the Node API (not WASM).
 
-```scheme
-;; Top-level function declarations
-(function_declaration
-  name: (identifier) @name
-  parameters: (formal_parameters) @params
-  return_type: (type_annotation)? @return_type) @func
+```typescript
+import Parser from "tree-sitter";
+import TypeScript from "tree-sitter-typescript";
+import type { EntitySummary } from "../types.js";
 
-;; Arrow functions assigned to const/let at top level
-(lexical_declaration
-  (variable_declarator
-    name: (identifier) @name
-    value: (arrow_function
-      parameters: (formal_parameters) @params))) @arrow
+const parser = new Parser();
+parser.setLanguage(TypeScript.typescript);
 
-;; Class declarations
-(class_declaration
-  name: (type_identifier) @name) @class
+// Node types that indicate ambient/declaration context — skip these
+const AMBIENT_PARENTS = new Set(["ambient_declaration", "declare_statement"]);
 
-;; Interface declarations
-(interface_declaration
-  name: (type_identifier) @name) @interface
+export function extractEntities(source: string, filePath: string): EntitySummary[] {
+  const tree = parser.parse(source);
+  const root = tree.rootNode;
+  const entities: EntitySummary[] = [];
 
-;; Type alias declarations
-(type_alias_declaration
-  name: (type_identifier) @name
-  value: (_) @value) @type_alias
+  for (let i = 0; i < root.childCount; i++) {
+    let node = root.child(i)!;
+    let exported = false;
 
-;; Enum declarations → extract as kind "type"
-(enum_declaration
-  name: (identifier) @name) @enum
+    // Skip ambient declarations (declare module, declare global, etc.)
+    if (AMBIENT_PARENTS.has(node.type)) continue;
 
-;; Export statements (named exports)
-(export_statement
-  declaration: (_)? @decl
-  (export_clause)? @clause) @export
+    // Unwrap export_statement to get the inner declaration
+    if (node.type === "export_statement") {
+      exported = true;
+      const decl = node.childForFieldName("declaration");
+      const clause = node.childForFieldName("source")
+        ? null  // re-export: export { x } from './y'
+        : node.children.find((c) => c.type === "export_clause");
 
-;; Top-level variable declarations (const/let/var)
-(program
-  (lexical_declaration
-    (variable_declarator
-      name: (identifier) @name)) @variable)
+      // Named re-exports: export { foo, bar } from './baz'
+      if (node.childForFieldName("source") && clause) {
+        // Skip re-exports with source — they reference external modules
+        continue;
+      }
+
+      // Local re-exports: export { foo, bar }
+      if (clause) {
+        for (const spec of clause.children) {
+          if (spec.type === "export_specifier") {
+            const name = spec.childForFieldName("name")?.text
+              ?? spec.childForFieldName("alias")?.text;
+            if (name) {
+              entities.push({
+                name, kind: "export", file: filePath,
+                line: spec.startPosition.row + 1,
+                signature: null, exported: true,
+              });
+            }
+          }
+        }
+        continue;
+      }
+
+      // Default export without declaration: export default expr
+      if (!decl) {
+        // Anonymous default export — skip (no meaningful name)
+        continue;
+      }
+      node = decl;
+    }
+
+    switch (node.type) {
+      case "function_declaration":
+      case "generator_function_declaration": {
+        const name = node.childForFieldName("name")?.text;
+        if (!name) break;
+        const params = node.childForFieldName("parameters")?.text ?? "()";
+        const retType = node.childForFieldName("return_type")?.text ?? "";
+        const isAsync = source.slice(node.startIndex, node.startIndex + 6) === "async ";
+        entities.push({
+          name, kind: "function", file: filePath,
+          line: node.startPosition.row + 1,
+          signature: `${isAsync ? "async " : ""}${name}${params}${retType}`,
+          exported,
+        });
+        break;
+      }
+
+      case "class_declaration": {
+        const name = node.childForFieldName("name")?.text;
+        if (!name) break;
+        entities.push({
+          name, kind: "class", file: filePath,
+          line: node.startPosition.row + 1,
+          signature: null, exported,
+        });
+        // Extract getters/setters from class body
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (let j = 0; j < body.childCount; j++) {
+            const member = body.child(j)!;
+            if (member.type === "method_definition") {
+              const kind = member.children.find(
+                (c) => c.type === "get" || c.type === "set"
+              );
+              if (kind) {
+                const propName = member.childForFieldName("name")?.text;
+                if (propName) {
+                  entities.push({
+                    name: `${kind.type}_${propName}`,
+                    kind: "function", file: filePath,
+                    line: member.startPosition.row + 1,
+                    signature: `${kind.type} ${propName}`,
+                    exported,
+                  });
+                }
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case "interface_declaration": {
+        const name = node.childForFieldName("name")?.text;
+        if (!name) break;
+        const typeParams = node.children.find(
+          (c) => c.type === "type_parameters"
+        )?.text ?? "";
+        entities.push({
+          name, kind: "interface", file: filePath,
+          line: node.startPosition.row + 1,
+          signature: typeParams ? `${name}${typeParams}` : null,
+          exported,
+        });
+        break;
+      }
+
+      case "type_alias_declaration": {
+        const name = node.childForFieldName("name")?.text;
+        if (!name) break;
+        const typeParams = node.children.find(
+          (c) => c.type === "type_parameters"
+        )?.text ?? "";
+        entities.push({
+          name, kind: "type", file: filePath,
+          line: node.startPosition.row + 1,
+          signature: typeParams ? `${name}${typeParams}` : null,
+          exported,
+        });
+        break;
+      }
+
+      case "enum_declaration": {
+        const name = node.childForFieldName("name")?.text;
+        if (!name) break;
+        entities.push({
+          name, kind: "type", file: filePath,
+          line: node.startPosition.row + 1,
+          signature: null, exported,
+        });
+        break;
+      }
+
+      case "lexical_declaration":
+      case "variable_declaration": {
+        for (const declarator of node.children) {
+          if (declarator.type !== "variable_declarator") continue;
+          const name = declarator.childForFieldName("name")?.text;
+          if (!name) continue;
+          const value = declarator.childForFieldName("value");
+          // Arrow functions get a signature
+          let signature: string | null = null;
+          if (value?.type === "arrow_function") {
+            const params = value.childForFieldName("parameters")?.text ?? "()";
+            const retType = value.childForFieldName("return_type")?.text ?? "";
+            signature = `${name}${params}${retType}`;
+          }
+          entities.push({
+            name, kind: "variable", file: filePath,
+            line: declarator.startPosition.row + 1,
+            signature, exported,
+          });
+        }
+        break;
+      }
+
+      // Skip: namespace_declaration, module_declaration, function_signature (overload)
+      default:
+        break;
+    }
+  }
+
+  return entities;
+}
 ```
 
-**Implementation notes:**
-- Run queries against `tree.rootNode` (top-level only — skip nested function declarations inside other functions).
-- For `exported`: check if the parent node is an `export_statement`.
-- For `signature`: concatenate parameters text and return type annotation text.
-- For getters/setters: query `(method_definition kind: "get"|"set")` inside class bodies. Extract as kind `"function"` with name `get_propName` / `set_propName`.
-- For function overloads: query all `function_signature` nodes but only emit the `function_declaration` (implementation). Skip signatures.
-- For `declare` statements: filter out nodes where the parent is `ambient_declaration`. Skip entirely.
+**Function overload handling:** The `function_signature` node type (overload declarations without body) is NOT in the switch — only `function_declaration` (which has a body) is extracted. This ensures one entity per overloaded function.
 
-Files that fail to parse (invalid syntax) should be indexed in `file_index` but produce zero entities. Log a warning, do not throw.
+**Error recovery:** If `parser.parse(source)` returns a tree with `tree.rootNode.hasError`, the tree is still usable — Tree-sitter does error recovery. Extract what we can. Only return empty entities if the file is completely unparseable (e.g., binary content that got past the binary check).
 
-**Gitignore and security exclusions:**
+Files that fail catastrophically should be indexed in `file_index` (path, mtime, hash) but produce zero entities. Log a warning via `console.warn`, do not throw.
 
-Before walking the file tree, read `.gitignore` (if it exists) and build a filter function using the `ignore` npm package (not hand-rolled regex — resolved Q5). Always exclude these paths regardless of `.gitignore` content:
+---
 
-- `node_modules/`
-- `.git/`
-- `.optima/`
-- `dist/`, `build/`, `out/`
-- `.claude/settings.local.json` (personal overrides — never index)
-- `CLAUDE.local.md` (developer's personal instruction overrides — never index or modify)
-- `.env`, `.env.*` (secrets)
-- `**/.claude/session-env/` (Claude Code plaintext env snapshots)
-- `**/.claude/projects/` (Claude Code session transcripts)
-- `**/.claude/file-history/` (Claude Code edit snapshots)
-- `**/.claude/paste-cache/`, `**/.claude/image-cache/` (Claude Code media buffers)
-- Files matching patterns in project `.gitignore`
+**File walker implementation (`src/indexer/file-indexer.ts`):**
 
-Note: Optima DOES index `.claude/settings.json`, `.claude/agents/`, `.claude/commands/`, `.claude/skills/`, and `.claude/rules/` because these are project configuration files that inform Optima's understanding. But it never indexes Claude Code's internal operational state.
+```typescript
+import { readdir, stat, lstat, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import ignore from "ignore";
+import { createHash } from "node:crypto";
+import type { FileState } from "../types.js";
+
+// Binary file extensions — skip these entirely
+const BINARY_EXTENSIONS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp", ".svg",
+  ".woff", ".woff2", ".ttf", ".eot", ".otf",
+  ".mp3", ".mp4", ".wav", ".ogg", ".webm", ".avi", ".mov",
+  ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
+  ".pdf", ".exe", ".dll", ".so", ".dylib", ".bin",
+  ".db", ".sqlite", ".sqlite3",
+]);
+
+// Hardcoded exclusions — always skip regardless of .gitignore
+const ALWAYS_EXCLUDE = [
+  "node_modules", ".git", ".optima", "dist", "build", "out",
+  ".env", ".env.*",
+  ".claude/settings.local.json",
+  "CLAUDE.local.md",
+];
+
+const CLAUDE_INTERNAL_DIRS = [
+  ".claude/session-env", ".claude/projects", ".claude/file-history",
+  ".claude/paste-cache", ".claude/image-cache",
+];
+```
+
+**Traversal order:** Depth-first, alphabetical within each directory. This ensures deterministic ordering across runs and platforms. Implementation:
+
+```typescript
+export async function walkProject(
+  rootPath: string,
+  gitignorePath?: string,
+): Promise<string[]> {
+  // Build ignore filter
+  const ig = ignore();
+  ALWAYS_EXCLUDE.forEach((p) => ig.add(p));
+  if (gitignorePath) {
+    try {
+      const content = await readFile(gitignorePath, "utf-8");
+      ig.add(content);
+    } catch { /* no .gitignore — fine */ }
+  }
+
+  const results: string[] = [];
+
+  async function walk(dir: string, relativeDir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // Permission denied or deleted — skip
+    }
+
+    // Sort alphabetically for deterministic order
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+      const relativePath = relativeDir
+        ? `${relativeDir}/${entry.name}`
+        : entry.name;
+
+      // Check gitignore + hardcoded exclusions
+      if (ig.ignores(relativePath)) continue;
+
+      // Check Claude Code internal dirs
+      if (CLAUDE_INTERNAL_DIRS.some((d) => relativePath.startsWith(d))) continue;
+
+      const fullPath = join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        await walk(fullPath, relativePath);
+      } else if (entry.isFile()) {
+        // Check symlink
+        try {
+          const lstats = await lstat(fullPath);
+          if (lstats.isSymbolicLink()) continue; // Skip symlinks
+        } catch { continue; }
+
+        // Check binary extension
+        const ext = entry.name.substring(entry.name.lastIndexOf(".")).toLowerCase();
+        if (BINARY_EXTENSIONS.has(ext)) continue;
+
+        results.push(relativePath.replace(/\\/g, "/")); // Forward-slash normalize
+      }
+    }
+  }
+
+  await walk(rootPath, "");
+  return results;
+}
+```
+
+**Binary detection fallback:** If extension is unknown, read first 512 bytes and check for null bytes:
+
+```typescript
+export async function isBinaryFile(filePath: string): Promise<boolean> {
+  try {
+    const fd = await readFile(filePath, { flag: "r" });
+    const sample = fd.subarray(0, 512);
+    return sample.includes(0x00);
+  } catch { return true; } // Can't read → treat as binary
+}
+```
+
+**Content hashing:**
+
+```typescript
+export function hashContent(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex");
+}
+
+// Empty file hash (constant — SHA-256 of empty string)
+export const EMPTY_FILE_HASH =
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+```
 
 **Performance budget:** <500ms for incremental re-index (<20 changed files). <2s for cold start full index of a typical project (<500 files).
+
+---
+
+**Gitignore integration notes:**
+
+The `ignore` npm package (^7.0.0) implements the full `.gitignore` specification including negation patterns (`!important.log`), directory-only patterns (`logs/`), and nested `.gitignore` files. Optima reads only the root `.gitignore` in MVP. The `ig.ignores(relativePath)` call takes a forward-slash relative path from the project root.
+
+Optima DOES index `.claude/settings.json`, `.claude/agents/`, `.claude/commands/`, `.claude/skills/`, and `.claude/rules/` because these are project configuration files. But it never indexes Claude Code's internal operational state.
 
 ---
 

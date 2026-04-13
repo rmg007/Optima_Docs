@@ -206,11 +206,52 @@ These are errors previously encountered and resolved in this project.
 
 ## Project Purpose Extraction Priority
 
-1. `package.json` → `description` field (preferred)
-2. `pyproject.toml` → `[project].description`
-3. `README.md` → first non-heading paragraph (truncate 200 chars)
+Used by `src/indexer/project-analyzer.ts` to populate `projectMeta.projectPurpose`. Copy this logic verbatim.
 
-If none found, `project_purpose` is null.
+```typescript
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+export async function extractProjectPurpose(projectRoot: string): Promise<string | null> {
+  // Priority 1: package.json description
+  try {
+    const pkg = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf-8"));
+    if (typeof pkg.description === "string" && pkg.description.trim().length > 0) {
+      return pkg.description.trim();
+    }
+  } catch { /* no package.json or invalid JSON */ }
+
+  // Priority 2: pyproject.toml [project].description
+  try {
+    const toml = await readFile(join(projectRoot, "pyproject.toml"), "utf-8");
+    const match = toml.match(/\[project\][^[]*?description\s*=\s*"([^"]+)"/s);
+    if (match?.[1]) {
+      return match[1].trim();
+    }
+  } catch { /* no pyproject.toml */ }
+
+  // Priority 3: README.md first non-heading paragraph
+  try {
+    const readme = await readFile(join(projectRoot, "README.md"), "utf-8");
+    const lines = readme.split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Skip empty lines, headings, badges, HTML tags
+      if (!trimmed) continue;
+      if (trimmed.startsWith("#")) continue;
+      if (trimmed.startsWith("![")) continue;
+      if (trimmed.startsWith("<")) continue;
+      if (trimmed.startsWith("---")) continue;
+      // Found first content paragraph
+      return trimmed.length > 200 ? trimmed.slice(0, 200) + "..." : trimmed;
+    }
+  } catch { /* no README.md */ }
+
+  return null;
+}
+```
+
+If none found, `projectPurpose` is `null` in the database and `purpose` is `null` in tool output.
 
 ---
 

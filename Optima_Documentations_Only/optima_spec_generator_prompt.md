@@ -36,9 +36,9 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
 ### 2. Tech Stack & Configuration
 - Copy tech stack table from 00_START_HERE.md
 - Add MCP `.mcp.json` examples (bunx and npx fallback)
-- List `package.json` dependencies with versions
-- Specify `tsconfig.json` settings (strict, noUncheckedIndexedAccess, target, module)
-- Specify `tsup.config.ts` (entry point, format, target)
+- Copy exact `package.json` with all dependencies and versions (from Doc 00)
+- Copy exact `tsconfig.json`, `tsup.config.ts`, `vitest.config.ts`, `drizzle.config.ts` (from Doc 00)
+- Include bootstrap commands (`bun init`, `bun add ...`)
 
 ### 3. Architecture Overview
 - Describe stdio-based MCP flow (Claude Code → tool call → Optima → SQLite → response)
@@ -65,7 +65,10 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
 - **Gotcha Retrieval Strategy (Q14):** Hierarchical directory prefix match + file array match, dedup by ID, sorted by hit_count desc, capped at 10
 - **Directory Scoping Precedence:** NULL (project-wide) → parent prefix → most specific first
 - **Entity Extraction Edge Cases:** async, arrow, default exports, re-exports, overloads, getters/setters, declare (skip), namespace (skip), generics, enums
-- **Tree-sitter Query Patterns:** Copy S-expression queries from Doc 03 (scheme syntax for function_declaration, class_declaration, etc.)
+- **Entity Extractor Implementation:** Copy full `extractEntities()` function from Doc 03 verbatim — includes all edge cases (async, arrow, getters/setters, overloads, enums, declare skip)
+- **File Walker Implementation:** Copy `walkProject()` function from Doc 03 — depth-first alphabetical, binary detection, symlink skip, ignore integration
+- **MCP Server Bootstrap:** Copy `src/index.ts` and `src/server.ts` from Doc 03 — includes signal handling, graceful shutdown, `wrapError()` pattern
+- **Database Connection Lifecycle:** Copy `src/db/connection.ts` from Doc 03 — lazy init, corruption recovery, WAL mode
 - **Error Sanitization:** `sanitizeError()` function runs BEFORE normalization, BEFORE storage — scrubs API keys, JWTs, DB URLs, bearer tokens
 - **Error Normalization:** `normalizeError()` function — includes Windows path stripping, UUID stripping
 - **memory_id semantics:** Random UUID v4 per call, NOT database row ID, is a receipt, not stored
@@ -79,6 +82,9 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
   - `CLAUDE.md` sections — all 5 templates (project_overview, architecture_rules, known_gotchas, patterns, preferences)
   - `.gitignore` addition and `.optima/.gitignore`
 
+- **Project Purpose Extraction:** Copy `extractProjectPurpose()` function from Doc 04 — package.json → pyproject.toml → README.md fallback chain
+- **Tech Stack Detection:** Copy `detectTechStack()` and `detectCommands()` functions from Doc 02 — dependency mapping table + config file signals
+- **Linter Detection:** Copy linter config table and algorithm from Doc 02
 - **Regeneration Logic:** 5-step process with malformed marker handling (orphaned START/END, duplicates, whitespace)
 - **Empty section omission:** Sections with zero entries omitted entirely
 - **Project purpose extraction priority:** package.json → pyproject.toml → README.md first paragraph
