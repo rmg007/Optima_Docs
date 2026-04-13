@@ -16,7 +16,7 @@ These descriptions are critical for Claude Code's Tool Search system. They deter
 
 | Tool | Description |
 |---|---|
-| `optima_get_context` | `Use before modifying any files in a directory, when encountering an error you haven't seen before, when starting work in a new area of the codebase, or when you need to understand what entities and patterns exist in a directory. Always call this before writing code.` |
+| `optima_get_context` | `Use before modifying any files in a directory, when encountering an error you haven't seen before, when starting work in a new area of the codebase, or when you need to understand what entities and patterns exist in a directory. Pass search_query with error text or keywords to find relevant gotchas and rules across the entire project, not just the current directory. Always call this before writing code.` |
 | `optima_memorize` | `Use after fixing any error, after discovering a rule the codebase follows, after noticing a recurring pattern, when the developer states a preference, or after completing a non-trivial task (to record the outcome and key learnings). Call immediately — do not batch or defer.` |
 | `optima_reindex` | `Use after major refactoring, after adding or removing significant dependencies, after restructuring directories, or when optima_get_context returns stale results that don't match the current file state.` |
 
@@ -409,7 +409,7 @@ export const ReindexOutputSchema = z.object({
 3. Query `file_index` for all files under the requested path.
 4. For each file, check `fs.stat(file).mtimeMs` against the stored `mtime_ms`.
 5. Files with newer mtimes: re-read content, recompute hash, re-extract entities via Tree-sitter, update `file_index` and `entities` tables.
-5a. **Secret scanning (during step 5):** After reading file content but before entity extraction, run `SECRET_PATTERNS` regex pass over the content. For each match: store a `security_findings` row with the file_id, line number, pattern name, and a **redacted** snippet (first 4 + `****` + last 4 chars of the matched value — NEVER the full secret). If a finding already exists for the same file_id + line + pattern_name, skip (dedup). Dismissed findings are preserved on re-index if the match still exists at the same line.
+5a. **Secret scanning (during step 5):** After reading file content but before entity extraction, run `SECRET_PATTERNS` regex pass over the content. For each match: store a `security_findings` row with the file_id, line number, pattern name, and a **redacted** snippet (first 4 + `****` + last 4 chars of the matched value — NEVER the full secret). If a finding already exists for the same file_id + line + pattern_name, skip (dedup). Note: during lazy re-indexing, only changed files are re-scanned — unchanged files retain their existing findings (including dismissed state). During `optima_reindex`, file_index rows are deleted and re-created (cascade deletes findings), so dismissed state resets for all files.
 6. Files with matching mtimes: skip (index is fresh).
 7. Files in `file_index` that no longer exist on disk: delete from `file_index` (cascade deletes entities).
 8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). If `search_query` is provided, ALSO run FTS5 search on `gotchas_fts` (see **FTS5 Search Merge Strategy** below) and merge results. Deduplicate by gotcha `id`. Increment `hit_count` for all returned gotchas. Update `updated_at` to current timestamp. For each returned gotcha with non-null `dependency_version`: parse the dependency name from the stored string (format: `name@version`), look up the current version in `project_meta.key_dependencies`. If the versions differ or the dependency is no longer present, set `possibly_outdated: true` on the output. If `dependency_version` is null, set `possibly_outdated: false`.
@@ -881,9 +881,10 @@ Optima DOES index `.claude/settings.json`, `.claude/agents/`, `.claude/commands/
     - `architectural_rule`: Insert into `rules` table with `type = "architectural_rule"`.
     - `pattern`: Insert into `rules` table with `type = "pattern"`.
     - `preference`: Insert into `rules` table with `type = "preference"`.
+    - `task_outcome`: Insert into `task_outcomes` table. Store `task`, `outcome`, `learnings`, `duration_hint`, `files`, `directory`, `tags`.
 3. Generate a random UUID v4 for `memory_id`. This is a correlation ID for the caller to reference this memorize operation — it is NOT the database row's `id`. The UUID is generated fresh per call and is not stored in the database. It serves as a receipt: "your memorize call succeeded, here's a reference."
-4. Count total rows across `gotchas` + `rules` tables for `total_memories`.
-5. **Trigger CLAUDE.md regeneration** after EVERY successful memorize call, regardless of type. Rationale: all memory types (error_fix, architectural_rule, pattern, preference) contribute to CLAUDE.md sections. The generator uses content hashing (step 5 of regeneration logic in Doc 04) to skip the actual file write if nothing changed, so frequent regeneration is cheap. Do NOT selectively regenerate only for project-wide rules — this causes stale CLAUDE.md when gotchas or patterns accumulate.
+4. Count total rows across `gotchas` + `rules` + `task_outcomes` tables for `total_memories`.
+5. **Trigger CLAUDE.md regeneration** after EVERY successful memorize call, regardless of type. Rationale: all memory types (error_fix, architectural_rule, pattern, preference, task_outcome) contribute to CLAUDE.md sections. The generator uses content hashing (step 5 of regeneration logic in Doc 04) to skip the actual file write if nothing changed, so frequent regeneration is cheap. Do NOT selectively regenerate only for project-wide rules — this causes stale CLAUDE.md when gotchas or patterns accumulate.
 6. Return `MemorizeOutput`.
 
 **Error normalization for dedup:**

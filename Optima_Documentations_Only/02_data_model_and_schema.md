@@ -105,6 +105,11 @@ export const entities = sqliteTable("entities", {
 // | dep_version   | gotchas  | Yes   | Yes (GotchaEntry)      | Yes           | Enables staleness detection when dependency versions change. |
 // | key_deps      | proj_meta| Yes   | Yes (via dependency_context)| Yes      | Surfaces detected dependency versions for context + staleness checks. |
 //
+// COMPUTED FIELDS (not stored in DB — calculated at query time in tool handlers):
+// | Field             | Interface        | Computed From | Notes |
+// |-------------------|------------------|---------------|-------|
+// | possibly_outdated | GotchaEntry      | dependency_version vs project_meta.key_dependencies | See Doc 03 step 8 |
+//
 // If you add a column to a table, decide whether it belongs in tool output.
 // If not, add it to this table so the omission is documented, not accidental.
 
@@ -562,7 +567,7 @@ export interface GotchaEntry {
   resolution: string;
   root_cause: string | null;
   dependency_version: string | null;  // "drizzle-orm@^0.38.0" — dep version when gotcha was recorded
-  possibly_outdated: boolean;          // computed: true if stored dependency_version differs from current project version
+  possibly_outdated: boolean;          // COMPUTED at query time (not a DB column) — true if stored dependency_version differs from current project version. See Doc 03 step 8.
   files: string[];
   directory: string | null;
   hit_count: number;
@@ -732,7 +737,7 @@ export function generateFeedbackRules(projectRoot: string): boolean;
 - **Entities:** Cascade-deleted with their parent file_index row.
 - **Gotchas:** Keep all in database (never deleted — needed for future error matching). `hit_count` tracks usefulness; `updated_at` refreshes each time `hit_count` increments. For CLAUDE.md generation, include only gotchas with `hit_count >= 2` (resolved Q4 — single authoritative threshold, see Doc 04 necessity test).
 - **Rules:** Keep all. Manual pruning via future tooling.
-- **Security findings:** Cascade-deleted with their parent file_index row (re-scanned on next index). Dismissed findings are preserved until the file changes — on re-index, if the line/pattern still matches, the dismissed state carries over; if the match disappears, the finding is deleted.
+- **Security findings:** Cascade-deleted with their parent file_index row. During **lazy re-indexing** (`optima_get_context` steps 5-7), only files with changed mtimes are re-indexed — unchanged files keep their security findings including dismissed state. When a changed file is re-indexed, its old findings are cascade-deleted and re-scanned from scratch (dismissed state is lost for that file). During **full re-index** (`optima_reindex`), all file_index rows are deleted and re-created, so ALL dismissed states are reset. This is acceptable because: (a) `optima_reindex` is a rare escape hatch, not a routine operation, (b) re-scanning after reindex is correct behavior — the file may have changed, and (c) dismissed false positives are fast to re-dismiss.
 - **Task outcomes:** Keep last 50 entries. Prune oldest entries beyond 50 during `getDatabase()` initialization. Task outcomes are proactive knowledge with diminishing relevance — old outcomes about abandoned approaches from 6 months ago are less useful than recent ones.
 - **Generation log:** Keep last 50 entries per file path. Prune during `getDatabase()` initialization (runs once on cold start, not on every tool call). SQL: `DELETE FROM generation_log WHERE id NOT IN (SELECT id FROM generation_log WHERE file_path = ? ORDER BY generated_at DESC LIMIT 50)` for each distinct `file_path`.
 
@@ -743,7 +748,7 @@ Optima does NOT use Drizzle Kit's migration system at runtime. Migrations are ha
 **Migration file convention:**
 ```
 src/db/migrations/
-├── 001_initial.ts        # Creates all 9 tables
+├── 001_initial.ts        # Creates 9 tables (8 Drizzle-modeled + schema_version)
 ├── 002_fts5.ts           # FTS5 virtual tables + sync triggers for gotchas and rules
 ├── 003_phase2_pruning.ts # Adds hit_count + pinned to rules (future)
 └── index.ts              # Exports ordered migration list
@@ -753,7 +758,7 @@ src/db/migrations/
 ```typescript
 export const migration = {
   version: 1,
-  description: "Initial schema — 7 tables",
+  description: "Initial schema — 9 tables (project_meta, file_index, entities, gotchas, rules, security_findings, task_outcomes, generation_log, schema_version)",
   up(db: Database): void {
     // Raw SQL via db.exec()
   },
@@ -775,7 +780,7 @@ This is the exact SQL that `src/db/migrations/001_initial.ts` must execute. Ever
 ```typescript
 export const migration = {
   version: 1,
-  description: "Initial schema — 7 tables",
+  description: "Initial schema — 9 tables (project_meta, file_index, entities, gotchas, rules, security_findings, task_outcomes, generation_log, schema_version)",
   up(db: Database): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS schema_version (

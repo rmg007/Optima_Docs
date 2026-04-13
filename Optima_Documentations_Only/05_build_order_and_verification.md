@@ -88,31 +88,34 @@ Add this after every build step's "Definition of Done":
 
 ### Step 2: Database Schema & Connection
 
-**Files to create:** `src/db/schema.ts`, `src/db/connection.ts`, `src/db/migrations.ts`, `src/db/migrations/001_initial.ts`
+**Files to create:** `src/db/schema.ts`, `src/db/connection.ts`, `src/db/migrations.ts`, `src/db/migrations/001_initial.ts`, `src/db/migrations/002_fts5.ts`, `src/db/migrations/index.ts`
 
 **Dependencies:** Step 1 (types)
 
-**Estimated time:** 2 hours
+**Estimated time:** 2.5 hours
 
 **Build Prompt:**
 
-> Create the database layer. Copy the Drizzle schema from Doc 02 verbatim into `src/db/schema.ts` -- all 7 tables (project_meta, file_index, entities, gotchas, rules, preferences, generation_log). Create `src/db/connection.ts` with lazy initialization, WAL mode, foreign keys, corruption recovery -- copy the implementation from Doc 03. Create `src/db/migrations.ts` with the migration runner from Doc 02 (version table, transaction-wrapped migrations). Create `src/db/migrations/001_initial.ts` with CREATE TABLE statements for all 7 tables.
+> Create the database layer. Copy the Drizzle schema from Doc 02 verbatim into `src/db/schema.ts` -- all 8 Drizzle-modeled tables (project_meta, file_index, entities, gotchas, rules, security_findings, task_outcomes, generation_log) plus the schema_version infrastructure table. Note: FTS5 virtual tables (gotchas_fts, rules_fts) are NOT in Drizzle -- they are created by migration 002. Create `src/db/connection.ts` with lazy initialization, WAL mode, foreign keys, corruption recovery -- copy the implementation from Doc 03. Create `src/db/migrations.ts` with the migration runner from Doc 02 (version table, transaction-wrapped migrations). Create `src/db/migrations/001_initial.ts` with CREATE TABLE statements for all 9 tables. Create `src/db/migrations/002_fts5.ts` with FTS5 virtual tables and sync triggers for gotchas and rules -- copy from Doc 02 verbatim. Create `src/db/migrations/index.ts` exporting the ordered migration list.
 
 **Verification:**
 
 - Database creates at `.optima/optima.db` on first `getDatabase()` call
 - WAL mode enabled
 - Foreign keys enabled
-- All 7 tables exist after migration
+- All 9 tables exist after migration 001 (including schema_version)
+- FTS5 virtual tables (gotchas_fts, rules_fts) exist after migration 002
+- FTS5 sync triggers fire on gotcha/rule insert/update/delete
 - `.optima/.gitignore` created
 - Corruption recovery works
 
 **Definition of Done:**
 
-- [ ] All 7 Drizzle tables match Doc 02 schema exactly
+- [ ] All 8 Drizzle tables + schema_version match Doc 02 schema exactly
+- [ ] FTS5 virtual tables created by migration 002 with sync triggers
 - [ ] `getDatabase()` is lazy
 - [ ] WAL mode and foreign keys enabled
-- [ ] Migration runner works
+- [ ] Migration runner works (001 then 002 in order)
 - [ ] Corruption recovery works
 - [ ] `.optima/.gitignore` created
 - [ ] 10+ unit tests
@@ -322,15 +325,16 @@ Add this after every build step's "Definition of Done":
 
 **Build Prompt:**
 
-> Implement all 3 tool handlers. `get-context.ts` follows the 11-step behavior from Doc 03 exactly: resolve path, validate traversal, check project_meta, query file_index, check mtimes, re-index changed files, delete removed files, query gotchas (hierarchical match), query rules (directory scoping), collect recent_changes, assemble output with directory description using pure string concatenation (no LLM). `memorize.ts` handles all 4 types (error_fix, architectural_rule, pattern, preference) with type-specific validation, error sanitization/normalization for error_fix type, and triggers CLAUDE.md regeneration after EVERY call. `reindex.ts` forces full re-index, re-runs project analysis, triggers CLAUDE.md regeneration, regenerates feedback rules file.
+> Implement all 3 tool handlers. `get-context.ts` follows the 11-step behavior from Doc 03 exactly: resolve path, validate traversal, check project_meta, query file_index, check mtimes, re-index changed files (with secret scanning step 5a), delete removed files, query gotchas (hierarchical match + FTS5 search if `search_query` provided), query rules (directory scoping + FTS5), query task_outcomes, query security_findings, collect recent_changes, assemble output with directory description using pure string concatenation (no LLM). `memorize.ts` handles all 5 types (error_fix, architectural_rule, pattern, preference, task_outcome) with type-specific validation and routing (error_fix → gotchas, architectural_rule/pattern/preference → rules, task_outcome → task_outcomes), error sanitization/normalization for error_fix type, and triggers CLAUDE.md regeneration after EVERY call. `reindex.ts` forces full re-index, re-runs project analysis, triggers CLAUDE.md regeneration, regenerates feedback rules file.
 
 **Verification:**
 
-- `optima_get_context` returns correct structure
+- `optima_get_context` returns correct structure (including security_warnings, task_insights, dependency_context)
 - Lazy re-indexing only processes changed files
-- Gotcha retrieval respects hierarchical matching
-- `optima_memorize` stores all 4 types correctly
+- Gotcha retrieval respects hierarchical matching + FTS5 search merge
+- `optima_memorize` stores all 5 types correctly (task_outcome → task_outcomes table)
 - `memory_id` is random UUID v4 (NOT database row ID)
+- `total_memories` counts gotchas + rules + task_outcomes
 - CLAUDE.md regenerated after every memorize call
 - `optima_reindex` triggers full re-index + analysis + CLAUDE.md + feedback rules
 
@@ -339,12 +343,15 @@ Add this after every build step's "Definition of Done":
 - [ ] get-context 11-step behavior matches Doc 03 exactly
 - [ ] Path traversal validation rejects escapes
 - [ ] Lazy re-indexing works (mtime comparison)
-- [ ] Deleted files removed from `file_index` (cascade deletes entities)
+- [ ] Secret scanning runs during re-indexing (step 5a)
+- [ ] FTS5 search works when `search_query` provided (merge + dedup)
+- [ ] Deleted files removed from `file_index` (cascade deletes entities + security_findings)
 - [ ] `recent_changes`: files re-indexed in this call sorted by mtime desc capped at 20
 - [ ] `directory_context.description` uses pure string concatenation (no LLM)
-- [ ] memorize handles all 4 types with correct validation
+- [ ] memorize handles all 5 types with correct validation and routing
 - [ ] `memory_id` is UUID v4 not stored is receipt only
-- [ ] CLAUDE.md regenerated after every memorize call (all types)
+- [ ] `total_memories` = gotchas + rules + task_outcomes row count
+- [ ] CLAUDE.md regenerated after every memorize call (all 5 types)
 - [ ] reindex re-runs project analysis + CLAUDE.md + feedback rules
 - [ ] 20+ unit tests across all 3 handlers
 
@@ -360,24 +367,25 @@ Add this after every build step's "Definition of Done":
 
 **Build Prompt:**
 
-> Create `src/generator/claude-md.ts` implementing CLAUDE.md generation with section markers. Copy the exact marker format, section templates, and regeneration logic from Doc 04. Implement: section marker parsing, content hash comparison (SHA-256, skip write if unchanged), the necessity test filtering (gotchas: hit_count >= 2 per Q4, rules: exclude linter-duplicates, patterns: exclude single-occurrence, preferences: include all), instruction budget enforcement (30-35 instructions total with caps per category: 10 rules, 10 gotchas, 5 patterns, 5 preferences), and malformed marker handling (orphaned START -> replace to next marker/EOF, orphaned END -> delete and append).
+> Create `src/generator/claude-md.ts` implementing CLAUDE.md generation with section markers. Copy the exact marker format, section templates, and regeneration logic from Doc 04. Implement all 7 sections: project_overview, architecture_rules, known_gotchas, patterns, preferences, security_warnings, task_insights. Implement: section marker parsing, content hash comparison (SHA-256, skip write if unchanged), the necessity test filtering (gotchas: hit_count >= 2 per Q4, rules: exclude linter-duplicates, patterns: exclude single-occurrence, preferences: include all, task outcomes: only with non-null learnings), instruction budget enforcement (30-40 instructions total with caps per category: 10 rules, 10 gotchas, 5 patterns, 5 preferences, 5 task insights — security_warnings exempt from budget), and malformed marker handling (orphaned START -> replace to next marker/EOF, orphaned END -> delete and append).
 
 **Verification:**
 
-- Generated CLAUDE.md contains all 5 sections in order
+- Generated CLAUDE.md contains up to 7 sections in order
 - Sections with zero entries after filtering are omitted
-- Necessity test: gotchas with `hit_count` < 2 excluded
-- Instruction budget: total <= 35
+- Necessity test: gotchas with `hit_count` < 2 excluded, task outcomes without learnings excluded
+- Instruction budget: total <= 40 (security_warnings exempt)
 - Content hash prevents unnecessary file writes
 - Human content outside markers preserved
 - Malformed markers handled gracefully
 
 **Definition of Done:**
 
-- [ ] All 5 section templates from Doc 04 implemented
+- [ ] All 7 section templates from Doc 04 implemented
 - [ ] Marker format exactly matches Doc 04
-- [ ] Necessity test matches Q4
-- [ ] Instruction budget algorithm from Doc 04 implemented (8 steps)
+- [ ] Necessity test matches Doc 04 (all 5 filter rules)
+- [ ] Instruction budget algorithm from Doc 04 implemented (8 steps, budget 30-40)
+- [ ] security_warnings section exempt from instruction budget
 - [ ] Content hash comparison prevents unnecessary writes
 - [ ] Malformed marker handling matches Doc 04
 - [ ] Sections with zero entries omitted entirely

@@ -96,14 +96,14 @@
     },
     {
       "id": "EE-009",
-      "description": "Generic interface",
+      "description": "Generic interface — kind is 'interface' per entity extractor code (interface_declaration case), not 'type'",
       "input": "export interface Repository<T extends Entity> {\n  findById(id: string): Promise<T | null>;\n  save(entity: T): Promise<T>;\n  delete(id: string): Promise<void>;\n}",
       "expectedEntities": [
         {
           "name": "Repository",
-          "kind": "type",
+          "kind": "interface",
           "exported": true,
-          "signature": "interface Repository<T extends Entity>"
+          "signature": "Repository<T extends Entity>"
         }
       ]
     },
