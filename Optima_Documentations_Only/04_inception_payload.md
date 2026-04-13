@@ -68,6 +68,8 @@ When you make a significant design choice (new pattern, structural decision, tec
 
 When beginning any task (bug fix, feature, refactor, test, review):
 - Call `optima_get_context` with the relevant directory path
+- **When encountering or debugging an error:** Pass the error message as `search_query` to enable cross-directory gotcha discovery. Example: `optima_get_context({ path: "src/api/", search_query: "ECONNREFUSED timeout" })`. This finds relevant gotchas even if they were stored against a different directory.
+- **When starting a feature or refactor:** Pass descriptive keywords as `search_query`. Example: `optima_get_context({ path: "src/auth/", search_query: "JWT token refresh" })`. This surfaces rules and patterns from related areas.
 - Use the returned context (gotchas, rules, entities) to inform your approach
 - Pay special attention to gotchas — they contain solutions to previously encountered errors
 
@@ -131,7 +133,8 @@ If you catch yourself thinking any of these, STOP. You are about to skip Optima 
 **Before writing code:**
 - "I know what this error means" → STOP. Check gotchas first. A previous session may have spent 30 minutes debugging this exact error.
 - "This directory is simple, no need for context" → STOP. Call `optima_get_context`. Simple directories still have architectural rules and patterns.
-- "I already read CLAUDE.md, I have the context" → STOP. CLAUDE.md is a 35-instruction summary. The tool returns directory-specific entities, gotchas, and recent changes.
+- "I already read CLAUDE.md, I have the context" → STOP. CLAUDE.md is a summary. The tool returns directory-specific entities, gotchas, and recent changes. Pass `search_query` to also search across directories.
+- "This error is from a different part of the codebase, Optima won't have it" → STOP. Pass the error text as `search_query`. FTS5 search finds gotchas across ALL directories, not just the one you're querying.
 - "Let me just look at the code first" → STOP. Looking at code without Optima context means missing the gotchas that explain WHY the code looks that way.
 
 **After fixing an error:**

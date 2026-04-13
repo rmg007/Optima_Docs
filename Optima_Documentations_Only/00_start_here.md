@@ -181,7 +181,8 @@ Every module is referenced by these paths across the corpus. If a stale document
 | `src/generator/feedback-rules.ts` | .claude/rules/optima-feedback.md generation | Doc 04 |
 | `src/db/schema.ts` | Drizzle schema (7 tables) | Doc 02 |
 | `src/db/migrations.ts` | Schema versioning and migration runner | Doc 02 |
-| `src/db/migrations/001_initial.ts` | Initial migration — CREATE TABLE for all 7 tables | Doc 02 |
+| `src/db/migrations/001_initial.ts` | Initial migration — CREATE TABLE for all 9 tables | Doc 02 |
+| `src/db/migrations/002_fts5.ts` | FTS5 virtual tables + sync triggers for gotchas and rules | Doc 02 |
 | `src/db/migrations/index.ts` | Exports ordered migration list | Doc 02 |
 | `src/db/connection.ts` | Database lifecycle (lazy init, WAL, corruption recovery) | Doc 03 |
 | `src/utils/hasher.ts` | SHA-256 content hashing | Doc 01 |

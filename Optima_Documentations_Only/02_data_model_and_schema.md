@@ -206,6 +206,26 @@ export const schemaVersion = sqliteTable("schema_version", {
   version: integer("version").primaryKey(),
   appliedAt: text("applied_at").notNull().default(sql`(datetime('now'))`),
 });
+
+// ── FTS5 Full-Text Search (virtual tables — not modeled in Drizzle) ──
+//
+// These virtual tables enable cross-directory text search on gotchas and rules.
+// Created by migration 002_fts5.ts. Queried via raw SQL (db.prepare), not Drizzle.
+//
+// gotchas_fts: FTS5 content-sync table mirroring gotchas(error_text, resolution, root_cause)
+// rules_fts:  FTS5 content-sync table mirroring rules(content, rationale)
+//
+// Sync is maintained by AFTER INSERT/UPDATE/DELETE triggers created in the migration.
+// The triggers keep the FTS index in lock-step with the source tables automatically.
+//
+// Query example:
+//   db.prepare(`
+//     SELECT g.* FROM gotchas g
+//     JOIN gotchas_fts ON gotchas_fts.rowid = g.id
+//     WHERE gotchas_fts MATCH ?
+//     ORDER BY rank
+//     LIMIT 10
+//   `).all(searchQuery);
 ```
 
 ---
@@ -724,7 +744,8 @@ Optima does NOT use Drizzle Kit's migration system at runtime. Migrations are ha
 ```
 src/db/migrations/
 ├── 001_initial.ts        # Creates all 9 tables
-├── 002_phase2_pruning.ts # Adds hit_count + pinned to rules (future)
+├── 002_fts5.ts           # FTS5 virtual tables + sync triggers for gotchas and rules
+├── 003_phase2_pruning.ts # Adds hit_count + pinned to rules (future)
 └── index.ts              # Exports ordered migration list
 ```
 
@@ -875,6 +896,108 @@ export const migration = {
 ```
 
 **Verification:** Compare every column in the Drizzle schema (above) against this CREATE TABLE SQL. They must be 1:1. Zero columns in Drizzle that aren't in the migration, and vice versa.
+
+### `002_fts5.ts` — FTS5 Full-Text Search Virtual Tables
+
+Creates FTS5 content-sync virtual tables for gotchas and rules, plus AFTER INSERT/UPDATE/DELETE triggers that keep the FTS index in sync with the source tables automatically. FTS5 is built into `better-sqlite3` — zero new dependencies.
+
+```typescript
+export const migration = {
+  version: 2,
+  description: "FTS5 virtual tables + sync triggers for gotchas and rules",
+  up(db: Database): void {
+    db.exec(`
+      -- Gotchas FTS5 (content-sync: mirrors error_text, resolution, root_cause)
+      CREATE VIRTUAL TABLE IF NOT EXISTS gotchas_fts USING fts5(
+        error_text, resolution, root_cause,
+        content=gotchas, content_rowid=id
+      );
+
+      -- Populate FTS from existing gotchas
+      INSERT INTO gotchas_fts(gotchas_fts) VALUES('rebuild');
+
+      -- Sync triggers: keep FTS in lock-step with gotchas table
+      CREATE TRIGGER IF NOT EXISTS gotchas_ai AFTER INSERT ON gotchas BEGIN
+        INSERT INTO gotchas_fts(rowid, error_text, resolution, root_cause)
+        VALUES (new.id, new.error_text, new.resolution, new.root_cause);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS gotchas_ad AFTER DELETE ON gotchas BEGIN
+        INSERT INTO gotchas_fts(gotchas_fts, rowid, error_text, resolution, root_cause)
+        VALUES ('delete', old.id, old.error_text, old.resolution, old.root_cause);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS gotchas_au AFTER UPDATE ON gotchas BEGIN
+        INSERT INTO gotchas_fts(gotchas_fts, rowid, error_text, resolution, root_cause)
+        VALUES ('delete', old.id, old.error_text, old.resolution, old.root_cause);
+        INSERT INTO gotchas_fts(rowid, error_text, resolution, root_cause)
+        VALUES (new.id, new.error_text, new.resolution, new.root_cause);
+      END;
+
+      -- Rules FTS5 (content-sync: mirrors content, rationale)
+      CREATE VIRTUAL TABLE IF NOT EXISTS rules_fts USING fts5(
+        content, rationale,
+        content=rules, content_rowid=id
+      );
+
+      -- Populate FTS from existing rules
+      INSERT INTO rules_fts(rules_fts) VALUES('rebuild');
+
+      -- Sync triggers: keep FTS in lock-step with rules table
+      CREATE TRIGGER IF NOT EXISTS rules_ai AFTER INSERT ON rules BEGIN
+        INSERT INTO rules_fts(rowid, content, rationale)
+        VALUES (new.id, new.content, new.rationale);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS rules_ad AFTER DELETE ON rules BEGIN
+        INSERT INTO rules_fts(rules_fts, rowid, content, rationale)
+        VALUES ('delete', old.id, old.content, old.rationale);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS rules_au AFTER UPDATE ON rules BEGIN
+        INSERT INTO rules_fts(rules_fts, rowid, content, rationale)
+        VALUES ('delete', old.id, old.content, old.rationale);
+        INSERT INTO rules_fts(rowid, content, rationale)
+        VALUES (new.id, new.content, new.rationale);
+      END;
+    `);
+  },
+};
+```
+
+**Why content-sync (not external-content):** FTS5 `content=` tables are read-only mirrors — the triggers handle all writes. This means:
+- Inserts/updates/deletes on `gotchas` and `rules` tables automatically update the FTS index.
+- No manual FTS maintenance code needed in gotcha-ledger.ts or rules-store.ts.
+- The `rebuild` command populates the FTS index from existing data on migration (handles databases created before FTS5 was added).
+
+**Query pattern (used in optima_get_context step 8):**
+```typescript
+// FTS5 search on gotchas — returns matching gotcha IDs ranked by relevance
+function searchGotchasFts(db: Database, query: string, limit: number): number[] {
+  const rows = db.prepare(`
+    SELECT g.id FROM gotchas g
+    JOIN gotchas_fts ON gotchas_fts.rowid = g.id
+    WHERE gotchas_fts MATCH ?
+    ORDER BY rank
+    LIMIT ?
+  `).all(query, limit) as Array<{ id: number }>;
+  return rows.map(r => r.id);
+}
+
+// FTS5 search on rules — returns matching rule IDs ranked by relevance
+function searchRulesFts(db: Database, query: string, limit: number): number[] {
+  const rows = db.prepare(`
+    SELECT r.id FROM rules r
+    JOIN rules_fts ON rules_fts.rowid = r.id
+    WHERE rules_fts MATCH ?
+    ORDER BY rank
+    LIMIT ?
+  `).all(query, limit) as Array<{ id: number }>;
+  return rows.map(r => r.id);
+}
+```
+
+**FTS5 query syntax notes:** The `MATCH` operator supports implicit AND (`auth timeout` matches rows containing both words), quoted phrases (`"auth timeout"` matches the exact phrase), prefix queries (`auth*`), and boolean operators (`auth OR timeout`). Optima passes the raw `search_query` string from the tool input directly to `MATCH` — FTS5 handles tokenization. If the query contains FTS5 syntax errors, catch the SQLite error and fall back to directory-only matching (do not throw).
 
 ## Phase 2 Schema Migration
 

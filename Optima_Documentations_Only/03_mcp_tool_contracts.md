@@ -231,6 +231,8 @@ export const GetContextInputSchema = z.object({
   path: z.string().min(1).describe("Directory or file path to get context for"),
   task_type: z.enum(["bug_fix", "feature", "refactor", "test", "review"]).optional()
     .describe("Optional hint about the type of task being performed"),
+  search_query: z.string().max(200).optional()
+    .describe("Free-text search across gotchas and rules — enables cross-directory discovery. Pass the error message when debugging, or keywords like 'authentication timeout' to find relevant gotchas outside the current directory."),
 });
 
 export const GetContextOutputSchema = z.object({
@@ -410,8 +412,8 @@ export const ReindexOutputSchema = z.object({
 5a. **Secret scanning (during step 5):** After reading file content but before entity extraction, run `SECRET_PATTERNS` regex pass over the content. For each match: store a `security_findings` row with the file_id, line number, pattern name, and a **redacted** snippet (first 4 + `****` + last 4 chars of the matched value — NEVER the full secret). If a finding already exists for the same file_id + line + pattern_name, skip (dedup). Dismissed findings are preserved on re-index if the match still exists at the same line.
 6. Files with matching mtimes: skip (index is fresh).
 7. Files in `file_index` that no longer exist on disk: delete from `file_index` (cascade deletes entities).
-8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). Increment `hit_count` for returned gotchas. Update `updated_at` to current timestamp. For each returned gotcha with non-null `dependency_version`: parse the dependency name from the stored string (format: `name@version`), look up the current version in `project_meta.key_dependencies`. If the versions differ or the dependency is no longer present, set `possibly_outdated: true` on the output. If `dependency_version` is null, set `possibly_outdated: false`.
-9. Query `rules` table filtered by `directory` matching the requested path (see **Directory Scoping Precedence** below).
+8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). If `search_query` is provided, ALSO run FTS5 search on `gotchas_fts` (see **FTS5 Search Merge Strategy** below) and merge results. Deduplicate by gotcha `id`. Increment `hit_count` for all returned gotchas. Update `updated_at` to current timestamp. For each returned gotcha with non-null `dependency_version`: parse the dependency name from the stored string (format: `name@version`), look up the current version in `project_meta.key_dependencies`. If the versions differ or the dependency is no longer present, set `possibly_outdated: true` on the output. If `dependency_version` is null, set `possibly_outdated: false`.
+9. Query `rules` table filtered by `directory` matching the requested path (see **Directory Scoping Precedence** below). If `search_query` is provided, ALSO run FTS5 search on `rules_fts` and merge results. Deduplicate by rule `id`. Most-specific-directory-first ordering still applies; FTS results without directory match are appended after directory-matched results.
 9a. Query `task_outcomes` table filtered by `directory` matching the requested path (same hierarchical prefix match as gotchas/rules). Return outcomes with non-null `learnings`, sorted by `created_at` DESC, capped at 5 entries.
 9b. Query `security_findings` table for all non-dismissed findings whose `file_id` references a file under the requested path. Join with `file_index` to get the file path. Sort by severity (critical > high > medium), then by `found_at` DESC. Cap at 10 entries.
 10. Collect `recent_changes` — file paths re-indexed in steps 5-7, sorted by mtime descending, capped at 20 entries. Empty on cold start.
@@ -429,6 +431,19 @@ Gotchas are matched to the current context using TWO mechanisms:
 2. **File matching:** Return gotchas where any entry in the `files` JSON array matches a file under the requested path.
 
 Results are deduplicated by gotcha `id` and sorted by `hit_count` descending. Capped at 10 entries returned per call (matching the CLAUDE.md instruction budget). All matching gotchas get their `hit_count` incremented, even if they exceed the cap (tracking is separate from display).
+
+**FTS5 Search Merge Strategy:**
+
+When `search_query` is provided in the input, run FTS5 full-text search in ADDITION to the structural directory/file matching above. This enables cross-directory gotcha and rule discovery — a gotcha stored against `src/api/auth/` can be found from `src/middleware/` if the search terms match.
+
+1. Run directory/file matching (existing logic above) → produces `directoryResults` set.
+2. Run `searchGotchasFts(db, search_query, 10)` → produces `ftsResults` set (gotcha IDs ranked by FTS5 relevance).
+3. Merge: start with `directoryResults` (these have structural relevance). Append `ftsResults` that aren't already in `directoryResults` (these have textual relevance but may be from unrelated directories).
+4. Deduplicate by gotcha `id`. Final sort: directory-matched results first (sorted by `hit_count` DESC), then FTS-only results (sorted by FTS5 rank).
+5. Cap at 10 total entries.
+6. Same merge logic applies to rules via `searchRulesFts()`.
+
+**FTS5 error handling:** If the `search_query` contains FTS5 syntax errors (e.g., unbalanced quotes), catch the SQLite error and fall back to directory-only matching. Do not throw — a bad search query should degrade gracefully, not fail the entire tool call. Log: `"FTS5 query error for '${search_query}': ${error.message}. Falling back to directory-only matching."`
 
 **Directory Scoping Precedence:**
 

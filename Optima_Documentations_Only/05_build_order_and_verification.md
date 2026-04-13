@@ -267,6 +267,9 @@ Add this after every build step's "Definition of Done":
 
 - [ ] Gotcha ledger CRUD operations work
 - [ ] Hierarchical directory matching works
+- [ ] FTS5 search works: `search_query` finds gotchas/rules across directories
+- [ ] FTS5 merge: directory results first, FTS-only results appended, deduped by ID
+- [ ] FTS5 error handling: malformed queries fall back to directory-only (no throw)
 - [ ] File array matching works alongside directory matching
 - [ ] Dedup by ID/sort by `hit_count` desc/cap at 10
 - [ ] `hit_count` and `updated_at` updated on retrieval
