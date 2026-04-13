@@ -160,7 +160,11 @@ export const ReindexOutputSchema = z.object({
 8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). Increment `hit_count` for returned gotchas. Update `updated_at` to current timestamp.
 9. Query `rules` table filtered by `directory` matching the requested path (see **Directory Scoping Precedence** below).
 10. Collect `recent_changes` — file paths re-indexed in steps 5-7, sorted by mtime descending, capped at 20 entries. Empty on cold start.
-11. Assemble and return `GetContextOutput`. (For `directory_context.description`, synthesize a concise summary of the directory's role, constructed by combining the project purpose with the directory's name, or parse a local `README.md` if present).
+11. Assemble and return `GetContextOutput`. For `directory_context.description`, use **pure string concatenation** (no LLM inference):
+    - If a `README.md` exists in the requested directory: use its first non-empty, non-heading line (truncated to 200 chars).
+    - Else if `projectPurpose` is non-null: `"${dirName} — part of ${projectPurpose}"`.
+    - Else: `"${dirName} directory"`.
+    - Example: `"auth — part of REST API for managing user accounts"` or `"utils directory"`.
 
 **Gotcha Retrieval Strategy:**
 

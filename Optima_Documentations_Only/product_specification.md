@@ -169,7 +169,7 @@ This follows Claude Code's progressive disclosure principle: backend rules don't
 
 Rules and gotchas accumulate over time. Without pruning, Optima's [CLAUDE.md](http://CLAUDE.md) sections will bloat and degrade Claude Code's instruction adherence. Phase 2 adds automated staleness detection:
 
-- **Gotchas** with `hit_count` of 0 and `last_hit_at` older than 30 days: demoted from [CLAUDE.md](http://CLAUDE.md) (kept in database for future matching but excluded from generated output).
+- **Gotchas** with `hit_count < 2`: already excluded from CLAUDE.md by the MVP necessity test (Q4). Phase 2 adds configurable thresholds and staleness-based pruning from the database itself (not just CLAUDE.md exclusion).
 - **Architecture rules** with no references in 60+ days: flagged for review. Optima can surface these in `optima_get_context` output as "stale rules — consider removing."
 - **Patterns** with only 1 recorded occurrence and no reuse in 30+ days: excluded from [CLAUDE.md](http://CLAUDE.md) generation.
 - **Periodic sweep:** On each `optima_get_context` call, check for stale entries. No background process — piggyback on the lazy indexing model.
@@ -251,7 +251,7 @@ Optima must understand Claude Code's state architecture to operate safely alongs
 | Q1 | Auto-generate on cold start? | YES — first `optima_get_context` triggers full init. 2s cold start acceptable for plug-and-play. | MVP | 01 (Cold Start Sequence), 02 (DB Init), 03 (tool step 1) |
 | Q2 | Existing CLAUDE.md handling? | Append below markers, never touch content above first marker or outside markers. | MVP | 04 (Regeneration Logic step 4) |
 | Q3 | Error dedup via hash collision? | Normalize for hash, store sanitized original. On collision: store both entries, emit `HASH_COLLISION` warning. | MVP | 03 (normalizeError, sanitizeError, error taxonomy) |
-| Q4 | hit_count threshold for CLAUDE.md? | `hit_count >= 2` = proven value. Gotchas with `hit_count < 2` excluded from CLAUDE.md generation. Additionally, gotchas with `hit_count = 0` older than 30 days excluded entirely. | MVP | 04 (necessity test, instruction budget enforcement) |
+| Q4 | hit_count threshold for CLAUDE.md? | `hit_count >= 2` = proven value. Gotchas with `hit_count < 2` excluded from CLAUDE.md generation. This is the single authoritative threshold — no secondary age-based filter. All gotchas remain in DB for matching regardless. | MVP | 04 (necessity test table, instruction budget enforcement) |
 | Q5 | .gitignore parsing? | `ignore` npm package (^7.0.0). Never hand-rolled regex. | MVP | 00 (Tech Stack), 03 (gitignore exclusions) |
 | Q6 | Bun vs Node SQLite? | `better-sqlite3` for runtime portability (works on both Bun and Node). If Bun is proven reliable, swap to `bun:sqlite` later. | MVP | 00 (Tech Stack, DO NOT), 02 (driver note) |
 | Q7 | Domain detection? | Dependency + directory signals (both required). | Phase 2 | Product Spec only |

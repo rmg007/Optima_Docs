@@ -84,7 +84,7 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
 - **Project purpose extraction priority:** package.json → pyproject.toml → README.md first paragraph
 - **Instruction budget:** 30-35 total, with caps per section (10 rules, 10 gotchas, 5 patterns, 5 preferences)
 - **Instruction budget enforcement algorithm:** Query → filter (necessity test) → sort → truncate → omit empty sections
-- **Necessity test filters:** Gotchas require `hit_count >= 2` (Q4). Exclude `hit_count = 0` older than 30 days. Exclude linter-enforced rules. Exclude single-occurrence patterns. Include all preferences.
+- **Necessity test filters:** Gotchas require `hit_count >= 2` (Q4 — single authoritative threshold). Exclude linter-enforced rules when `linterDetected` is non-null. Exclude single-occurrence patterns. Include all preferences.
 
 ### 7. Edge Cases, Validation & Error Handling
 - **Input validation:** Zod refinements for optima_memorize (type-dependent required fields)

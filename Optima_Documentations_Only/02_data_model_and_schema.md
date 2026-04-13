@@ -152,6 +152,73 @@ This is the **single source of truth** for which config files Optima checks when
 
 **Impact on CLAUDE.md generation:** When `linterDetected` is non-null, the necessity test in Doc 04 excludes formatting/style rules from the `architecture_rules` section (the linter already enforces them).
 
+**JSON field serialization/deserialization:** Several Drizzle `text()` columns store JSON-encoded arrays: `techStack`, `linterDetected`, `files` (in gotchas and rules), and `tags`. These are stored as raw JSON strings in SQLite (e.g., `'["eslint","prettier"]'`). When reading from the database for tool output or internal use, **always `JSON.parse()` these fields** into their typed array form. When writing, **always `JSON.stringify()`** the array before storage. The TypeScript interfaces and Zod schemas define the *parsed* types (e.g., `string[]`, `string[] | null`), NOT the raw JSON string form.
+
+```typescript
+// Reading from DB → tool output
+const row = db.prepare("SELECT * FROM project_meta WHERE id = 1").get();
+const techStack: string[] = JSON.parse(row.tech_stack);                    // '["typescript","react"]' → ["typescript","react"]
+const linterDetected: string[] | null = row.linter_detected
+  ? JSON.parse(row.linter_detected)                                        // '["eslint"]' → ["eslint"]
+  : null;                                                                   // null → null
+const files: string[] = JSON.parse(row.files);                             // '["src/foo.ts"]' → ["src/foo.ts"]
+
+// Writing to DB
+db.prepare("UPDATE project_meta SET tech_stack = ? WHERE id = 1")
+  .run(JSON.stringify(["typescript", "react"]));                            // ["typescript","react"] → '["typescript","react"]'
+```
+
+---
+
+## Tech Stack Detection Dictionary
+
+This is the **authoritative lookup table** for populating `projectMeta.techStack`. The project analyzer reads config files at the project root and maps detected signals to stack labels. Labels are lowercase strings stored in a JSON array.
+
+**Detection sources (checked in order):**
+
+### 1. `package.json` dependency mapping
+
+Scan `dependencies` and `devDependencies` keys. Map dependency names to stack labels:
+
+| Dependency Name (contains) | Stack Label | Category |
+| --- | --- | --- |
+| `typescript` | `"typescript"` | Language |
+| `react` | `"react"` | Framework |
+| `next` | `"next.js"` | Framework |
+| `vue` | `"vue"` | Framework |
+| `svelte` | `"svelte"` | Framework |
+| `angular` (scoped `@angular/core`) | `"angular"` | Framework |
+| `express` | `"express"` | Server |
+| `fastify` | `"fastify"` | Server |
+| `hono` | `"hono"` | Server |
+| `drizzle-orm` | `"drizzle"` | ORM |
+| `prisma` | `"prisma"` | ORM |
+| `vitest` | `"vitest"` | Test |
+| `jest` | `"jest"` | Test |
+| `tailwindcss` | `"tailwind"` | CSS |
+| `@modelcontextprotocol/sdk` | `"mcp"` | Protocol |
+
+**Matching rule:** Use `dependencies[key].includes(name)` — e.g., `@next/font` matches `"next"`. Deduplicate labels.
+
+### 2. Config file signals
+
+| Config File | Stack Label |
+| --- | --- |
+| `tsconfig.json` exists | `"typescript"` (if not already from package.json) |
+| `pyproject.toml` exists | `"python"` |
+| `Cargo.toml` exists | `"rust"` |
+| `go.mod` exists | `"go"` |
+| `Gemfile` exists | `"ruby"` |
+| `pom.xml` or `build.gradle` exists | `"java"` |
+
+### 3. Runtime label
+
+Always add `"bun"` if the project uses Optima (Optima runs on Bun).
+
+**Output format:** Sorted alphabetically. Stored as JSON array string in DB: `'["bun","drizzle","mcp","typescript","vitest"]'`.
+
+**Extensibility:** This dictionary is intentionally limited to the most common stacks. An agent implementing this should use exact string matching (not fuzzy). Unknown dependencies are ignored — better to have a short accurate list than a noisy one. Phase 2 can expand with more granular detection.
+
 ---
 
 ## TypeScript Interfaces
@@ -276,11 +343,123 @@ export class OptimaError extends Error {
 
 ---
 
+## Internal Module Interfaces
+
+These are the exported function signatures for the CRUD modules referenced by tool handlers. Copy into the respective files.
+
+### `src/memory/gotcha-ledger.ts`
+
+```typescript
+import type { GotchaEntry } from "../types.js";
+import type { Database } from "better-sqlite3";
+
+export interface GotchaLedger {
+  /** Find gotchas matching a directory path (hierarchical prefix match) OR file array overlap.
+   *  Deduplicates by id, sorts by hit_count DESC, increments hit_count for all matches. */
+  findByContext(db: Database, directoryPath: string, filePaths?: string[]): GotchaEntry[];
+
+  /** Upsert a gotcha by error_hash. If hash exists: update resolution, files, updated_at.
+   *  If not: insert new row. Returns the row id. */
+  upsertByHash(db: Database, entry: {
+    errorText: string;      // Already sanitized
+    errorHash: string;      // SHA-256 of normalized error
+    resolution: string;
+    files: string[];
+    directory: string | null;
+    tags: string[];
+  }): number;
+
+  /** Get gotchas passing the necessity test for CLAUDE.md generation.
+   *  Filters: hit_count >= 2. Sorts by hit_count DESC. Caps at limit. */
+  getForGeneration(db: Database, limit: number): GotchaEntry[];
+}
+```
+
+### `src/memory/rules-store.ts`
+
+```typescript
+import type { RuleEntry } from "../types.js";
+import type { Database } from "better-sqlite3";
+
+export interface RulesStore {
+  /** Insert a new rule (architectural_rule, pattern, or preference). Returns the row id. */
+  insert(db: Database, entry: {
+    type: "architectural_rule" | "pattern" | "preference";
+    content: string;
+    rationale: string | null;
+    directory: string | null;
+    files: string[];
+    tags: string[];
+  }): number;
+
+  /** Find rules matching a directory path (hierarchical prefix match).
+   *  Returns project-wide (directory IS NULL) + prefix matches, sorted by specificity. */
+  findByDirectory(db: Database, directoryPath: string): RuleEntry[];
+
+  /** Get rules passing the necessity test for CLAUDE.md generation.
+   *  Filters by type, excludes linter-duplicates if linterDetected is provided.
+   *  Sorts by created_at DESC. Caps at limit per type. */
+  getForGeneration(db: Database, type: "architectural_rule" | "pattern" | "preference", limit: number, linterDetected: string[] | null): RuleEntry[];
+}
+```
+
+### `src/db/connection.ts`
+
+```typescript
+import type Database from "better-sqlite3";
+
+/** Lazily initializes the database connection. First call creates .optima/ directory,
+ *  opens/creates optima.db, runs migrations, prunes generation_log.
+ *  Subsequent calls return the cached connection. */
+export function getDatabase(projectRoot: string): Database;
+```
+
+### `src/indexer/project-analyzer.ts`
+
+```typescript
+import type { Database } from "better-sqlite3";
+
+export interface ProjectAnalysis {
+  name: string;
+  purpose: string | null;
+  techStack: string[];
+  buildCommand: string | null;
+  testCommand: string | null;
+  lintCommand: string | null;
+  linterDetected: string[] | null;
+}
+
+/** Analyzes the project root to detect tech stack, commands, purpose, and linters.
+ *  Reads package.json, tsconfig.json, pyproject.toml, README.md, and linter configs.
+ *  Upserts result into project_meta table. Returns the analysis. */
+export function analyzeProject(db: Database, projectRoot: string): ProjectAnalysis;
+```
+
+### `src/generator/claude-md.ts`
+
+```typescript
+/** Regenerates CLAUDE.md with section markers. Reads existing content, replaces
+ *  marker-bounded sections, appends new sections, handles malformed markers.
+ *  Computes content hash — skips file write if unchanged. Returns true if file was written. */
+export function regenerateClaudeMd(db: Database, projectRoot: string): boolean;
+```
+
+### `src/generator/feedback-rules.ts`
+
+```typescript
+/** Writes .claude/rules/optima-feedback.md with the inception payload.
+ *  Creates .claude/rules/ directory if needed. Content is static for MVP.
+ *  Skips write if file already exists with correct content. Returns true if file was written. */
+export function generateFeedbackRules(projectRoot: string): boolean;
+```
+
+---
+
 ## Retention Policy
 
 - **File index:** No limit. Rows deleted when files are deleted from disk (detected during re-index).
 - **Entities:** Cascade-deleted with their parent file_index row.
-- **Gotchas:** Keep all. `hit_count` tracks usefulness. `updated_at` is refreshed each time `hit_count` increments, making it usable as a "last hit" proxy for the necessity test filter during [CLAUDE.md](http://CLAUDE.md) generation (MVP: exclude gotchas where `hit_count = 0` AND `created_at` is older than 30 days).
+- **Gotchas:** Keep all in database (never deleted — needed for future error matching). `hit_count` tracks usefulness; `updated_at` refreshes each time `hit_count` increments. For CLAUDE.md generation, include only gotchas with `hit_count >= 2` (resolved Q4 — single authoritative threshold, see Doc 04 necessity test).
 - **Rules:** Keep all. Manual pruning via future tooling.
 - **Generation log:** Keep last 50 entries per file path. Prune during `getDatabase()` initialization (runs once on cold start, not on every tool call). SQL: `DELETE FROM generation_log WHERE id NOT IN (SELECT id FROM generation_log WHERE file_path = ? ORDER BY generated_at DESC LIMIT 50)` for each distinct `file_path`.
 

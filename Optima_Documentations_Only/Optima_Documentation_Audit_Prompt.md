@@ -194,8 +194,8 @@ Your audit is the **critical second pass** — looking for what that first pass 
    - What about new gotchas? New patterns? Do they trigger regeneration too?
 
 6. **`optima_reindex` side effects:**
-   - Doc 03 doesn't mention CLAUDE.md regeneration after reindex
-   - But logically the project context changed — should it regenerate?
+   - Doc 03 steps 5-7 specify: re-run project analysis, trigger CLAUDE.md regeneration, regenerate feedback rules
+   - Verify this is consistent with Doc 04 regeneration trigger list (should list `optima_reindex` as a trigger)
 
 7. **`recent_changes` population:**
    - Doc 01: "files whose mtime changed since last index"
