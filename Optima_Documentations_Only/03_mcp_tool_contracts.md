@@ -647,7 +647,11 @@ const BINARY_EXTENSIONS = new Set([
 // Hardcoded exclusions — always skip regardless of .gitignore
 const ALWAYS_EXCLUDE = [
   "node_modules", ".git", ".optima", "dist", "build", "out",
-  ".env", ".env.*",
+  ".env",
+  ".env.local", ".env.development", ".env.production", ".env.staging",
+  ".env.development.local", ".env.production.local",
+  // NOTE: .env.example and .env.template are NOT excluded — they are
+  // typically committed and safe to index (they contain placeholder values).
   ".claude/settings.local.json",
   "CLAUDE.local.md",
 ];

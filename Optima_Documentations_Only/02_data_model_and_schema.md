@@ -573,8 +573,9 @@ import type Database from "better-sqlite3";
 
 /** Lazily initializes the database connection. First call creates .optima/ directory,
  *  opens/creates optima.db, runs migrations, prunes generation_log.
- *  Subsequent calls return the cached connection. */
-export function getDatabase(projectRoot: string): Database;
+ *  Subsequent calls return the cached connection.
+ *  Uses getProjectRoot() internally — callers do NOT pass the root path. */
+export function getDatabase(): Database;
 ```
 
 ### `src/indexer/project-analyzer.ts`

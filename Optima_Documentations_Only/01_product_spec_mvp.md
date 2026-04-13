@@ -88,7 +88,7 @@ The only exception is `optima_reindex` — a manual escape hatch for full projec
 
 ### Recent Changes Detection
 
-`GetContextOutput.recent_changes` returns file paths that were re-indexed during the current `optima_get_context` call (i.e., files whose mtime changed since last index). These are the files Optima just updated in `file_index` during step 3-5 of the lazy indexing flow. Sorted by mtime descending (most recently modified first). Capped at 20 entries. On cold start (no prior index), this list is empty — the entire project is new, so "recent changes" is meaningless.
+`GetContextOutput.recent_changes` returns file paths that were re-indexed during the current `optima_get_context` call — files whose `mtime_ms` changed since last index, plus files deleted from disk and cleaned from the index. This is the canonical definition (see Doc 03 `optima_get_context` steps 5-7 for the authoritative implementation). Sorted by mtime descending (most recently modified first). Capped at 20 entries. On cold start (no prior index), this list is empty — the entire project is new, so "recent changes" is meaningless.
 
 ## MVP Tool Surface
 

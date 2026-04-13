@@ -17,14 +17,14 @@
     },
     {
       "id": "EE-002",
-      "description": "Arrow function export (const = arrow)",
+      "description": "Arrow function export (const = arrow) — kind is 'variable' per spec, not 'function'",
       "input": "export const handleRequest = async (req: Request, res: Response): Promise<void> => {\n  res.json({ ok: true });\n};",
       "expectedEntities": [
         {
           "name": "handleRequest",
-          "kind": "function",
+          "kind": "variable",
           "exported": true,
-          "signature": "const handleRequest = async (req: Request, res: Response): Promise<void> => ..."
+          "signature": "handleRequest(req: Request, res: Response): Promise<void>"
         }
       ]
     },
@@ -164,9 +164,9 @@
         },
         {
           "name": "DEFAULT_LEVEL",
-          "kind": "function",
+          "kind": "variable",
           "exported": true,
-          "signature": "const DEFAULT_LEVEL = 'info'"
+          "signature": null
         },
         {
           "name": "internalHelper",
