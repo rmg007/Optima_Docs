@@ -405,6 +405,22 @@ These are errors previously encountered and resolved in this project.
 
 **Note:** If no preferences exist, this section is omitted entirely.
 
+### Section: `security_warnings`
+
+```markdown
+<!-- OPTIMA:START security_warnings -->
+## Security Warnings (Optima-managed)
+
+Potential secrets or credentials detected in source files. Review and fix these before committing.
+
+{{#each security_warnings where dismissed = false, sorted by severity desc, limit 5}}
+- **{{finding.severity | upper}}** `{{finding.pattern_name}}` in `{{finding.file}}:{{finding.line}}` — {{finding.snippet}}
+{{/each}}
+<!-- OPTIMA:END security_warnings -->
+```
+
+**Note:** If no non-dismissed security findings exist, this section is omitted entirely. Capped at 5 findings (most severe first). This section does NOT count toward the instruction budget — security warnings are always shown regardless of budget constraints.
+
 ### Section: `task_insights`
 
 ```markdown

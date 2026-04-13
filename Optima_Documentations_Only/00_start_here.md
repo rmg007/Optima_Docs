@@ -266,6 +266,7 @@ Optima operates alongside Claude Code. Understanding Claude Code's internal stat
 - **DO NOT use `bun:sqlite` directly.** Use `better-sqlite3` for runtime portability (resolved Q6 — allows fallback to Node if Bun's MCP spawner has issues). If Bun is proven reliable, can swap to `bun:sqlite` as a future optimization.
 - **DO NOT install `axios`, `node-fetch`, `express`, `react`, or `electron`.** This project has no HTTP client, no HTTP server, no frontend.
 - **DO NOT create a separate database file for learning/memory.** Everything lives in one SQLite database: `.optima/optima.db`.
+- **DO NOT store the actual secret value in `security_findings`.** Store only the pattern type (`pattern_name`), file path, line number, and a redacted snippet (first 4 chars + `****` + last 4 chars). The `scanForSecrets()` function in Doc 03 handles redaction — never bypass it. This is a hard security boundary, not a convention.
 - **DO NOT guess at schema fields, Zod shapes, or error codes.** Every one is defined explicitly in the spec documents.
 
 ## When Stuck

@@ -275,6 +275,15 @@ export const GetContextOutputSchema = z.object({
     rationale: z.string().nullable(),
     directory: z.string().nullable(),
   })),
+  security_warnings: z.array(z.object({
+    id: z.number(),
+    file: z.string(),
+    line: z.number(),
+    pattern_name: z.string().describe("Type of secret detected: aws_key, private_key, generic_api_key, jwt, connection_string"),
+    severity: z.enum(["critical", "high", "medium"]),
+    snippet: z.string().nullable().describe("Redacted preview — NEVER the actual secret value"),
+    dismissed: z.boolean(),
+  })).describe("Potential secrets or credentials detected in source files during indexing"),
   task_insights: z.array(z.object({
     id: z.number(),
     task: z.string(),
@@ -398,11 +407,13 @@ export const ReindexOutputSchema = z.object({
 3. Query `file_index` for all files under the requested path.
 4. For each file, check `fs.stat(file).mtimeMs` against the stored `mtime_ms`.
 5. Files with newer mtimes: re-read content, recompute hash, re-extract entities via Tree-sitter, update `file_index` and `entities` tables.
+5a. **Secret scanning (during step 5):** After reading file content but before entity extraction, run `SECRET_PATTERNS` regex pass over the content. For each match: store a `security_findings` row with the file_id, line number, pattern name, and a **redacted** snippet (first 4 + `****` + last 4 chars of the matched value — NEVER the full secret). If a finding already exists for the same file_id + line + pattern_name, skip (dedup). Dismissed findings are preserved on re-index if the match still exists at the same line.
 6. Files with matching mtimes: skip (index is fresh).
 7. Files in `file_index` that no longer exist on disk: delete from `file_index` (cascade deletes entities).
 8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). Increment `hit_count` for returned gotchas. Update `updated_at` to current timestamp. For each returned gotcha with non-null `dependency_version`: parse the dependency name from the stored string (format: `name@version`), look up the current version in `project_meta.key_dependencies`. If the versions differ or the dependency is no longer present, set `possibly_outdated: true` on the output. If `dependency_version` is null, set `possibly_outdated: false`.
 9. Query `rules` table filtered by `directory` matching the requested path (see **Directory Scoping Precedence** below).
 9a. Query `task_outcomes` table filtered by `directory` matching the requested path (same hierarchical prefix match as gotchas/rules). Return outcomes with non-null `learnings`, sorted by `created_at` DESC, capped at 5 entries.
+9b. Query `security_findings` table for all non-dismissed findings whose `file_id` references a file under the requested path. Join with `file_index` to get the file path. Sort by severity (critical > high > medium), then by `found_at` DESC. Cap at 10 entries.
 10. Collect `recent_changes` — file paths re-indexed in steps 5-7, sorted by mtime descending, capped at 20 entries. Empty on cold start.
 11. Assemble and return `GetContextOutput`. For `directory_context.description`, use **pure string concatenation** (no LLM inference):
     - If a `README.md` exists in the requested directory: use its first non-empty, non-heading line (truncated to 200 chars).
@@ -664,6 +675,56 @@ import { join } from "node:path";
 import ignore from "ignore";
 import { createHash } from "node:crypto";
 import type { FileState } from "../types.js";
+
+// ── Secret Scanning Patterns ─────────────────────────────────
+// Run against file content during indexing (step 5a). Results stored
+// in security_findings table. NEVER store the matched value — only
+// the pattern name, line number, and a redacted snippet.
+const SECRET_PATTERNS = [
+  { name: "aws_key", pattern: /AKIA[0-9A-Z]{16}/g, severity: "critical" as const },
+  { name: "private_key", pattern: /-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/g, severity: "critical" as const },
+  { name: "generic_api_key", pattern: /(?:api[_-]?key|apikey)\s*[:=]\s*['"][a-zA-Z0-9_\-]{20,}['"]/gi, severity: "high" as const },
+  { name: "jwt", pattern: /eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g, severity: "high" as const },
+  { name: "connection_string", pattern: /(postgres|mysql|mongodb|redis):\/\/[^\s"']+/gi, severity: "critical" as const },
+  { name: "github_token", pattern: /ghp_[a-zA-Z0-9]{36}/g, severity: "critical" as const },
+  { name: "generic_secret", pattern: /(?:secret|password|passwd|token)\s*[:=]\s*['"][a-zA-Z0-9_\-]{8,}['"]/gi, severity: "medium" as const },
+];
+
+/** Redact a matched secret value for safe storage. NEVER store the raw value. */
+function redactSecret(value: string): string {
+  if (value.length <= 8) return "****";
+  return value.slice(0, 4) + "****" + value.slice(-4);
+}
+
+/** Scan file content for secret patterns. Returns findings with redacted snippets. */
+export function scanForSecrets(content: string, filePath: string): Array<{
+  line: number;
+  patternName: string;
+  severity: "critical" | "high" | "medium";
+  snippet: string;
+}> {
+  const findings: Array<{ line: number; patternName: string; severity: "critical" | "high" | "medium"; snippet: string }> = [];
+  const lines = content.split("\n");
+
+  for (const { name, pattern, severity } of SECRET_PATTERNS) {
+    // Reset regex lastIndex for each file
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(content)) !== null) {
+      // Find line number from character offset
+      const beforeMatch = content.slice(0, match.index);
+      const lineNum = beforeMatch.split("\n").length;
+      findings.push({
+        line: lineNum,
+        patternName: name,
+        severity,
+        snippet: `${name} detected: ${redactSecret(match[0])}`,
+      });
+    }
+  }
+
+  return findings;
+}
 
 // Binary file extensions — skip these entirely
 const BINARY_EXTENSIONS = new Set([

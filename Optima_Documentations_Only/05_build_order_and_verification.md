@@ -172,6 +172,9 @@ Add this after every build step's "Definition of Done":
 
 - [ ] `walkProject()` matches Doc 03 specification exactly
 - [ ] Binary detection works (checks first 512 bytes for null bytes)
+- [ ] Secret scanning runs during file indexing (step 5a): `scanForSecrets()` detects all `SECRET_PATTERNS`
+- [ ] Secret findings stored with redacted snippets — NEVER the raw secret value
+- [ ] Dismissed findings preserved on re-index if match still exists
 - [ ] All 12 entity extraction edge cases handled
 - [ ] Tree-sitter parses TypeScript files correctly
 - [ ] Tests assert against frozen dataset: `test_fixtures/entity_extraction_dataset.json`

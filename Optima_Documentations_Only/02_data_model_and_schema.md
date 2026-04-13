@@ -168,6 +168,28 @@ export const taskOutcomes = sqliteTable("task_outcomes", {
 // Claude Code starts a similar task, Optima can surface insights like "a similar
 // task took ~45min and required RS256 instead of HS256."
 
+// ── Security Findings ─────────────────────────────────────────
+
+export const securityFindings = sqliteTable("security_findings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fileId: integer("file_id").notNull().references(() => fileIndex.id, { onDelete: "cascade" }),
+  line: integer("line").notNull(),
+  patternName: text("pattern_name").notNull(),  // "aws_key" | "private_key" | "generic_api_key" | "jwt" | "connection_string"
+  severity: text("severity").notNull().default("high"),  // "critical" | "high" | "medium"
+  snippet: text("snippet"),                      // Surrounding context (NOT the secret itself — redacted). e.g. "AKIA****...****WXYZ on line 42"
+  foundAt: text("found_at").notNull().default(sql`(datetime('now'))`),
+  dismissed: integer("dismissed", { mode: "boolean" }).notNull().default(false),  // Developer can dismiss false positives
+}, (table) => ({
+  fileIdx: index("idx_security_findings_file").on(table.fileId),
+  patternIdx: index("idx_security_findings_pattern").on(table.patternName),
+}));
+
+// CRITICAL SAFETY RULE: The `snippet` field must NEVER contain the actual secret value.
+// Store only a redacted preview: first 4 chars + "****" + last 4 chars, or the
+// pattern name and line number. The secret scanning step in the file indexer
+// (Doc 03, step 5a) is responsible for redacting before storage.
+// See also Doc 00 "DO NOT" list: "DO NOT store the actual secret value."
+
 // ── Generation Log ────────────────────────────────────────────
 
 export const generationLog = sqliteTable("generation_log", {
@@ -407,12 +429,23 @@ export interface GetContextInput {
   task_type?: "bug_fix" | "feature" | "refactor" | "test" | "review";
 }
 
+export interface SecurityFinding {
+  id: number;
+  file: string;
+  line: number;
+  pattern_name: string;
+  severity: "critical" | "high" | "medium";
+  snippet: string | null;  // Redacted preview — NEVER the actual secret
+  dismissed: boolean;
+}
+
 export interface GetContextOutput {
   project: ProjectSummary;
   directory_context: DirectoryContext;
   gotchas: GotchaEntry[];
   architectural_rules: RuleEntry[];
   task_insights: TaskOutcomeEntry[];
+  security_warnings: SecurityFinding[];
   recent_changes: string[];
   dependency_context: {
     key_dependencies: DependencyInfo[];
@@ -679,6 +712,7 @@ export function generateFeedbackRules(projectRoot: string): boolean;
 - **Entities:** Cascade-deleted with their parent file_index row.
 - **Gotchas:** Keep all in database (never deleted — needed for future error matching). `hit_count` tracks usefulness; `updated_at` refreshes each time `hit_count` increments. For CLAUDE.md generation, include only gotchas with `hit_count >= 2` (resolved Q4 — single authoritative threshold, see Doc 04 necessity test).
 - **Rules:** Keep all. Manual pruning via future tooling.
+- **Security findings:** Cascade-deleted with their parent file_index row (re-scanned on next index). Dismissed findings are preserved until the file changes — on re-index, if the line/pattern still matches, the dismissed state carries over; if the match disappears, the finding is deleted.
 - **Task outcomes:** Keep last 50 entries. Prune oldest entries beyond 50 during `getDatabase()` initialization. Task outcomes are proactive knowledge with diminishing relevance — old outcomes about abandoned approaches from 6 months ago are less useful than recent ones.
 - **Generation log:** Keep last 50 entries per file path. Prune during `getDatabase()` initialization (runs once on cold start, not on every tool call). SQL: `DELETE FROM generation_log WHERE id NOT IN (SELECT id FROM generation_log WHERE file_path = ? ORDER BY generated_at DESC LIMIT 50)` for each distinct `file_path`.
 
@@ -689,7 +723,7 @@ Optima does NOT use Drizzle Kit's migration system at runtime. Migrations are ha
 **Migration file convention:**
 ```
 src/db/migrations/
-├── 001_initial.ts        # Creates all 7 tables
+├── 001_initial.ts        # Creates all 9 tables
 ├── 002_phase2_pruning.ts # Adds hit_count + pinned to rules (future)
 └── index.ts              # Exports ordered migration list
 ```
@@ -800,6 +834,19 @@ export const migration = {
       );
       CREATE INDEX IF NOT EXISTS idx_rules_type ON rules(type);
       CREATE INDEX IF NOT EXISTS idx_rules_directory ON rules(directory);
+
+      CREATE TABLE IF NOT EXISTS security_findings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES file_index(id) ON DELETE CASCADE,
+        line INTEGER NOT NULL,
+        pattern_name TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'high',
+        snippet TEXT,
+        found_at TEXT NOT NULL DEFAULT (datetime('now')),
+        dismissed INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_security_findings_file ON security_findings(file_id);
+      CREATE INDEX IF NOT EXISTS idx_security_findings_pattern ON security_findings(pattern_name);
 
       CREATE TABLE IF NOT EXISTS task_outcomes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
