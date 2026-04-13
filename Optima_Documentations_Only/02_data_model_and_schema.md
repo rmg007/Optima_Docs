@@ -42,6 +42,7 @@ export const projectMeta = sqliteTable("project_meta", {
   lintCommand: text("lint_command"),
   projectPurpose: text("project_purpose"),
   linterDetected: text("linter_detected"), // JSON array of strings, e.g. '["eslint","prettier"]'. See AUTHORITATIVE linter config list below. null if none detected.
+  keyDependencies: text("key_dependencies"), // JSON array of {name, version, detected_from} objects. Parsed from package.json dependencies matching DEPENDENCY_MAP. null if none detected.
   lastFullIndex: text("last_full_index"),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
 });
@@ -101,6 +102,8 @@ export const entities = sqliteTable("entities", {
 // | tags          | gotchas  | Yes   | No                     | No            | Freeform tags for Phase 2 search. Not needed in MVP tool output. |
 // | files         | rules    | Yes   | No                     | No            | Stored for provenance. Rules are scoped by `directory`, not individual files. |
 // | tags          | rules    | Yes   | No                     | No            | Same as gotchas tags. Phase 2 search feature. |
+// | dep_version   | gotchas  | Yes   | Yes (GotchaEntry)      | Yes           | Enables staleness detection when dependency versions change. |
+// | key_deps      | proj_meta| Yes   | Yes (via dependency_context)| Yes      | Surfaces detected dependency versions for context + staleness checks. |
 //
 // If you add a column to a table, decide whether it belongs in tool output.
 // If not, add it to this table so the omission is documented, not accidental.
@@ -113,6 +116,7 @@ export const gotchas = sqliteTable("gotchas", {
   errorHash: text("error_hash").notNull(),
   resolution: text("resolution").notNull(),
   rootCause: text("root_cause"),  // Why the error occurred, not just what fixed it (optional)
+  dependencyVersion: text("dependency_version"),  // e.g. "drizzle-orm@^0.38.0" — dep name@version when gotcha was recorded (optional)
   files: text("files").notNull().default("[]"),
   directory: text("directory"),
   tags: text("tags").notNull().default("[]"),
@@ -386,10 +390,13 @@ export interface GetContextOutput {
   gotchas: GotchaEntry[];
   architectural_rules: RuleEntry[];
   recent_changes: string[];
+  dependency_context: {
+    key_dependencies: DependencyInfo[];
+  };
 }
 
 export type MemorizeInput =
-  | { type: "error_fix"; error: string; resolution: string; rootCause?: string; files?: string[]; directory?: string; tags?: string[] }
+  | { type: "error_fix"; error: string; resolution: string; rootCause?: string; dependencyVersion?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "architectural_rule"; rule: string; rationale?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "pattern"; pattern: string; example?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "preference"; preference: string; files?: string[]; directory?: string; tags?: string[] };
@@ -427,6 +434,12 @@ export interface ReindexOutput {
 
 // ── Internal Types ────────────────────────────────────────────
 
+export interface DependencyInfo {
+  name: string;           // "drizzle-orm"
+  version: string;        // "^0.39.0"
+  detected_from: string;  // "package.json"
+}
+
 export interface ProjectSummary {
   name: string;
   purpose: string | null;
@@ -459,6 +472,8 @@ export interface GotchaEntry {
   error_text: string;
   resolution: string;
   root_cause: string | null;
+  dependency_version: string | null;  // "drizzle-orm@^0.38.0" — dep version when gotcha was recorded
+  possibly_outdated: boolean;          // computed: true if stored dependency_version differs from current project version
   files: string[];
   directory: string | null;
   hit_count: number;
@@ -527,6 +542,7 @@ export interface GotchaLedger {
     errorText: string;      // Already sanitized
     errorHash: string;      // SHA-256 of normalized error
     resolution: string;
+    dependencyVersion: string | null;  // e.g. "drizzle-orm@^0.38.0"
     files: string[];
     directory: string | null;
     tags: string[];
@@ -591,10 +607,12 @@ export interface ProjectAnalysis {
   testCommand: string | null;
   lintCommand: string | null;
   linterDetected: string[] | null;
+  keyDependencies: DependencyInfo[] | null;  // Parsed from package.json deps matching DEPENDENCY_MAP
 }
 
-/** Analyzes the project root to detect tech stack, commands, purpose, and linters.
+/** Analyzes the project root to detect tech stack, commands, purpose, linters, and key dependencies.
  *  Reads package.json, tsconfig.json, pyproject.toml, README.md, and linter configs.
+ *  Parses dependency versions from package.json for entries matching DEPENDENCY_MAP.
  *  Upserts result into project_meta table. Returns the analysis. */
 export function analyzeProject(db: Database, projectRoot: string): ProjectAnalysis;
 ```
@@ -683,6 +701,7 @@ export const migration = {
         lint_command TEXT,
         project_purpose TEXT,
         linter_detected TEXT,
+        key_dependencies TEXT,
         last_full_index TEXT,
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
@@ -720,6 +739,7 @@ export const migration = {
         error_hash TEXT NOT NULL,
         resolution TEXT NOT NULL,
         root_cause TEXT,
+        dependency_version TEXT,
         files TEXT NOT NULL DEFAULT '[]',
         directory TEXT,
         tags TEXT NOT NULL DEFAULT '[]',

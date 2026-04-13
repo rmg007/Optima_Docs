@@ -204,6 +204,7 @@ Add this after every build step's "Definition of Done":
 - [ ] Build/test/lint commands detected from package.json scripts
 - [ ] Linter detection uses authoritative list from Doc 02
 - [ ] `linterDetected` format matches Q15
+- [ ] Key dependencies parsed from package.json and stored in `project_meta.key_dependencies` as JSON array
 - [ ] Project purpose extraction follows Doc 03 step 11 logic
 - [ ] 8+ unit tests
 

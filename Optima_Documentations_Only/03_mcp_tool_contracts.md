@@ -262,6 +262,8 @@ export const GetContextOutputSchema = z.object({
     error_text: z.string(),
     resolution: z.string(),
     root_cause: z.string().nullable(),
+    dependency_version: z.string().nullable(),
+    possibly_outdated: z.boolean(),  // computed: true if dependency_version differs from current project version
     files: z.array(z.string()),
     directory: z.string().nullable(),
     hit_count: z.number(),
@@ -274,6 +276,13 @@ export const GetContextOutputSchema = z.object({
     directory: z.string().nullable(),
   })),
   recent_changes: z.array(z.string()),
+  dependency_context: z.object({
+    key_dependencies: z.array(z.object({
+      name: z.string().describe("Dependency name, e.g. 'drizzle-orm'"),
+      version: z.string().describe("Version string from package.json, e.g. '^0.39.0'"),
+      detected_from: z.string().describe("Source file, e.g. 'package.json'"),
+    })),
+  }).describe("Dependency versions for key project dependencies (matching tech stack detection dictionary)"),
   // Verification fields (for Iron Law 3: Evidence Before Claims)
   files_reindexed: z.number(),        // how many files had changed mtimes and were re-indexed
   files_removed: z.number(),          // how many deleted files were cleaned from the index
@@ -292,6 +301,8 @@ export const MemorizeInputSchema = z.object({
     .describe("What fixed the error (for error_fix)"),
   rootCause: z.string().max(500).optional()
     .describe("Why the error occurred — deeper explanation beyond the resolution (for error_fix, optional)"),
+  dependencyVersion: z.string().max(100).optional()
+    .describe("Dependency name@version active when the error occurred, e.g. 'drizzle-orm@^0.38.0' (for error_fix, optional)"),
   rule: z.string().optional()
     .describe("The rule or decision (for architectural_rule)"),
   rationale: z.string().optional()
@@ -364,13 +375,13 @@ export const ReindexOutputSchema = z.object({
 **Internal steps (in order):**
 
 1. Resolve `path` relative to project root using `path.resolve(projectRoot, inputPath)`. **Security: validate the resolved absolute path starts with `projectRoot`** — if not (e.g., `../../.ssh/`), throw `OptimaError("PATH_NOT_FOUND", "Path escapes project root")`. Then normalize to forward slashes. If the validated path does not exist on disk, throw `OptimaError("PATH_NOT_FOUND")`.
-2. Check if project metadata exists in `project_meta` table. If not, run full project analysis first (detect tech stack from `package.json`, `tsconfig.json`, `pyproject.toml`, etc.).
+2. Check if project metadata exists in `project_meta` table. If not, run full project analysis first (detect tech stack from `package.json`, `tsconfig.json`, `pyproject.toml`, etc.). During project analysis, also parse `dependencies` and `devDependencies` from `package.json` into `key_dependencies` — filter to dependencies matching the tech stack detection dictionary (`DEPENDENCY_MAP` in Doc 02). Store as JSON array of `{name, version, detected_from}` objects in `project_meta.key_dependencies`.
 3. Query `file_index` for all files under the requested path.
 4. For each file, check `fs.stat(file).mtimeMs` against the stored `mtime_ms`.
 5. Files with newer mtimes: re-read content, recompute hash, re-extract entities via Tree-sitter, update `file_index` and `entities` tables.
 6. Files with matching mtimes: skip (index is fresh).
 7. Files in `file_index` that no longer exist on disk: delete from `file_index` (cascade deletes entities).
-8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). Increment `hit_count` for returned gotchas. Update `updated_at` to current timestamp.
+8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). Increment `hit_count` for returned gotchas. Update `updated_at` to current timestamp. For each returned gotcha with non-null `dependency_version`: parse the dependency name from the stored string (format: `name@version`), look up the current version in `project_meta.key_dependencies`. If the versions differ or the dependency is no longer present, set `possibly_outdated: true` on the output. If `dependency_version` is null, set `possibly_outdated: false`.
 9. Query `rules` table filtered by `directory` matching the requested path (see **Directory Scoping Precedence** below).
 10. Collect `recent_changes` — file paths re-indexed in steps 5-7, sorted by mtime descending, capped at 20 entries. Empty on cold start.
 11. Assemble and return `GetContextOutput`. For `directory_context.description`, use **pure string concatenation** (no LLM inference):
