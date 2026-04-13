@@ -10,11 +10,11 @@ An MCP server that indexes your project, remembers what errors you've hit and ho
 
 | Order | File | Purpose |
 | --- | --- | --- |
-| 1 | `00_START_HERE.md` | This file. Rules, tech stack, constraints. |
-| 2 | `01_PRODUCT_SPEC_MVP.md` | What Optima is, how it works, what to build, project structure. |
-| 3 | `02_DATA_MODEL_AND_SCHEMA.md` | Drizzle schemas, TypeScript interfaces, SQLite tables. Copy verbatim. |
-| 4 | `03_MCP_TOOL_CONTRACTS.md` | Zod input/output schemas for all 3 tools. Copy verbatim. |
-| 5 | `04_INCEPTION_PAYLOAD.md` | Exact file content Optima generates in host projects. Copy verbatim. |
+| 1 | `00_start_here.md` | This file. Rules, tech stack, constraints. |
+| 2 | `01_product_spec_mvp.md` | What Optima is, how it works, what to build, project structure. |
+| 3 | `02_data_model_and_schema.md` | Drizzle schemas, TypeScript interfaces, SQLite tables. Copy verbatim. |
+| 4 | `03_mcp_tool_contracts.md` | Zod input/output schemas for all 3 tools. Copy verbatim. |
+| 5 | `04_inception_payload.md` | Exact file content Optima generates in host projects. Copy verbatim. |
 
 ## Tech Stack (Locked)
 
