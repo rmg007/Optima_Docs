@@ -6,11 +6,11 @@
 
 ## 1. Problem
 
-Claude Code starts every session with amnesia. It doesn’t remember the weird framework bug you fixed yesterday, the architectural decision you made last week, or the project conventions you’ve explained five times. Developers compensate by manually maintaining [CLAUDE.md](http://CLAUDE.md) files and re-explaining context — tedious work that compounds with project complexity.
+Claude Code starts every session with amnesia. It doesn't remember the weird framework bug you fixed yesterday, the architectural decision you made last week, or the project conventions you've explained five times. Developers compensate by manually maintaining [CLAUDE.md](http://CLAUDE.md) files and re-explaining context — tedious work that compounds with project complexity.
 
 ## 2. Solution
 
-Optima is an MCP server that sits alongside Claude Code. It automatically understands your project’s structure, remembers solutions to errors, and maintains the intelligence files that Claude Code reads. Every session is smarter than the last — without the developer doing anything extra.
+Optima is an MCP server that sits alongside Claude Code. It automatically understands your project's structure, remembers solutions to errors, and maintains the intelligence files that Claude Code reads. Every session is smarter than the last — without the developer doing anything extra.
 
 ## 3. Philosophy
 
@@ -35,7 +35,7 @@ Developer ↔ Claude Code ↔ Optima (MCP Server)
 
 ### The Inception Pattern
 
-MCP servers can’t passively observe Claude Code conversations. They only activate when called. Optima solves this by generating the rules that instruct Claude Code to call it:
+MCP servers can't passively observe Claude Code conversations. They only activate when called. Optima solves this by generating the rules that instruct Claude Code to call it:
 
 Optima generates `.claude/rules/optima-feedback.md` which tells Claude Code:
 
@@ -167,7 +167,7 @@ This follows Claude Code's progressive disclosure principle: backend rules don't
 
 ### 10.4 Automated Pruning
 
-Rules and gotchas accumulate over time. Without pruning, Optima’s [CLAUDE.md](http://CLAUDE.md) sections will bloat and degrade Claude Code’s instruction adherence. Phase 2 adds automated staleness detection:
+Rules and gotchas accumulate over time. Without pruning, Optima's [CLAUDE.md](http://CLAUDE.md) sections will bloat and degrade Claude Code's instruction adherence. Phase 2 adds automated staleness detection:
 
 - **Gotchas** with `hit_count` of 0 and `last_hit_at` older than 30 days: demoted from [CLAUDE.md](http://CLAUDE.md) (kept in database for future matching but excluded from generated output).
 - **Architecture rules** with no references in 60+ days: flagged for review. Optima can surface these in `optima_get_context` output as "stale rules — consider removing."
@@ -187,9 +187,9 @@ Rules and gotchas accumulate over time. Without pruning, Optima’s [CLAUDE.md](
 
 ### Month One
 
-1. Gotcha Ledger is Claude Code’s first reference for errors
+1. Gotcha Ledger is Claude Code's first reference for errors
 2. Accumulated rules produce more consistent code
-3. Developer hasn’t manually edited [CLAUDE.md](http://CLAUDE.md) in 2 weeks
+3. Developer hasn't manually edited [CLAUDE.md](http://CLAUDE.md) in 2 weeks
 
 ### Phase 2 (Month Two)
 
@@ -212,7 +212,7 @@ Optima must understand Claude Code's state architecture to operate safely alongs
 
 **Implication for Optima:** Optima writes `.claude/rules/optima-feedback.md` (safe — rules are additive). In Phase 2, if Optima generates hook configurations, they must go into `.claude/settings.json` (the committed, team-shared file) — never into `.claude/settings.local.json` (personal) or managed settings (enterprise). Optima must read the existing `settings.json`, merge its hooks into the existing `hooks` object, and write back — never overwrite the entire file.
 
-**Enterprise graceful degradation:** Enterprise-managed Claude Code environments can set `disableAllHooks: true` or `allowManagedHooksOnly: true`, which silently blocks all non-managed hooks. If Optima’s Phase 2 hook generation is deployed in such an environment, the hooks will be ignored with no error. Optima must not depend on hooks for core functionality — the rules-based inception pattern (MVP) must remain the primary feedback mechanism, with hooks as a best-effort enhancement. Optima should detect managed environments (check for managed settings presence) and skip hook generation if hooks are disabled.
+**Enterprise graceful degradation:** Enterprise-managed Claude Code environments can set `disableAllHooks: true` or `allowManagedHooksOnly: true`, which silently blocks all non-managed hooks. If Optima's Phase 2 hook generation is deployed in such an environment, the hooks will be ignored with no error. Optima must not depend on hooks for core functionality — the rules-based inception pattern (MVP) must remain the primary feedback mechanism, with hooks as a best-effort enhancement. Optima should detect managed environments (check for managed settings presence) and skip hook generation if hooks are disabled.
 
 **MCP server configuration placement:**
 
@@ -225,9 +225,9 @@ Optima must understand Claude Code's state architecture to operate safely alongs
 - `~/.claude/projects/` — full session transcript history (JSONL)
 - `~/.claude/file-history/` — before/after edit snapshots
 - `~/.claude/paste-cache/`, `~/.claude/image-cache/` — media buffers
-- `CLAUDE.local.md` — developer’s personal instruction overrides (gitignored, takes priority over [CLAUDE.md](http://CLAUDE.md))
+- `CLAUDE.local.md` — developer's personal instruction overrides (gitignored, takes priority over [CLAUDE.md](http://CLAUDE.md)). Optima must never read, modify, or generate this file. It is the developer's personal space.
 - `.claude/settings.local.json` — personal permission overrides (gitignored)
-- Any `.env` or `secrets/` path in the project
+- Any `.env` file or `**/secrets/**` path in the project
 
 **Paths Optima reads but does not modify:**
 
@@ -240,30 +240,13 @@ Optima must understand Claude Code's state architecture to operate safely alongs
 - **Not an agent framework.** No CrewAI, no orchestration.
 - **Not a cloud service.** Everything runs locally.
 - **Not an editor extension.** No VS Code dependency.
-- **Not a linter.** It teaches Claude Code the rules, doesn’t enforce them.
+- **Not a linter.** It teaches Claude Code the rules, doesn't enforce them.
 
 ## 14. Open Questions — ALL RESOLVED
 
-**All 16 questions resolved on April 12, 2026. These are now binding design decisions.**
+**All 11 questions resolved on April 12, 2026. These are now binding design decisions.**
 
 **Additional questions (from Claude Code state architecture review):**
 
 - **Q10:** ✅ **RESOLVED.** When Phase 2 generates hooks into `.claude/settings.json`, Optima reads existing JSON, deep-merges its hooks into the `hooks` object, and preserves all non-Optima entries. Never overwrites the full file.
 - **Q11:** ✅ **RESOLVED.** Defer enterprise-managed detection until team features are in scope. For now, the rules-based inception pattern (MVP) remains the primary feedback mechanism — hooks are a best-effort Phase 2 enhancement.
-
-| # | Question | Notes |
-| --- | --- | --- |
-| Q1 ✅ | Auto-generate on first `optima_get_context`? | **YES.** Auto-generate. First call triggers full index, generates [CLAUDE.md](http://CLAUDE.md) and feedback rules. Cold start ~2s is acceptable — only happens once. Core to plug-and-play philosophy. |
-| Q2 ✅ | How to handle existing hand-written [CLAUDE.md](http://CLAUDE.md)? | **Append below, never touch above.** Optima scans for existing content. If [CLAUDE.md](http://CLAUDE.md) exists with no Optima markers, append sections at the bottom. If markers exist, update only between them. Content above the first `<!-- OPTIMA:START -->` marker is sacred. Developer's hand-written rules always take precedence (top-down reading). |
-| Q3 ✅ | Normalize error messages for dedup? | **YES — normalize for hashing, store original.** Store raw `error_text` as-is (for display). Compute `error_hash` from normalized version (strip paths, line numbers, timestamps, memory addresses). On hash collision from genuinely different errors, store both with `HASH_COLLISION` warning. |
-| Q4 ✅ | `hit_count` threshold for [CLAUDE.md](http://CLAUDE.md) inclusion? | **2 hits.** A gotcha useful twice has proven value. Sort by `hit_count` desc, include top 10. If fewer than 10 total gotchas, include all regardless of hit count. Revisit threshold after one month of real usage. |
-| Q5 ✅ | Respect `.gitignore` for indexing? | **YES, mandatory.** Use the `ignore` npm package to parse gitignore patterns correctly. Always exclude regardless of .gitignore: `node_modules/`, `.git/`, `.optima/`, `dist/`, `build/`, `out/`, `.next/`, `.nuxt/`, `coverage/`, `.venv/`, `__pycache__/`. Correctness concern — indexing node_modules pollutes entity DB with irrelevant entries. |
-| Q6 ✅ | Bun vs Node for MCP spawner compatibility? | **Test Bun on day one, have Node fallback.** Use `better-sqlite3` (not `bun:sqlite`) for runtime portability. If `bunx` works as MCP spawner, keep Bun. If not, fall back to `npx`  • `tsx`. Code stays runtime-agnostic. ⚠️ This revises the original DO NOT rule in 00_START_HERE — portability wins over runtime purity at this stage. |
-| Q7 ✅ | Domain detection for agent generation? | **Dependency analysis + directory naming, require both signals.** React/Vue/Svelte in deps → frontend domain. Express/FastAPI/Hono in deps → API domain. Drizzle/Prisma/TypeORM → database domain. Cross-reference with directory structure (`src/components/` → frontend, `src/api/` → API, `src/db/` → database). Require signals from BOTH deps and dirs before generating a domain agent. One signal alone is not enough. Phase 2 only. |
-| Q8 ✅ | Agent `allowedTools` restrictions? | **YES — explicit allowlists per agent.** `deep-architect.md` → `Read, Grep, Glob` (read-only, thinks not edits). `quick-fix.md` → `Read, Edit, Write, Bash` (acts). `reviewer.md` → `Read, Grep, Glob, Bash` (reads + runs tests, no edits). Follows principle of least privilege. Phase 2 only. |
-| Q9 ✅ | Token budget measurement? | **Character count ÷ 4.** Exact tokenization requires a tokenizer library — too slow and adds a dependency for minimal accuracy gain. 4000 token budget ≈ 16,000 chars. Allocate proportionally (40% gotchas, 30% rules, 20% entities, 10% recent changes), truncate each section at its char limit. 10% overshoot is acceptable. Phase 2 only. |
-| Q12 ✅ | Database initialization timing? | **Lazy on first tool call.** The MCP server process starts immediately and listens on stdio. Database creation is deferred until the first `optima_get_context` call. `getDatabase()` in `connection.ts` handles lazy init with caching. See `02_DATA_MODEL_AND_SCHEMA.md` "Database Initialization & Lifecycle". |
-| Q13 ✅ | Path normalization across OS? | **Always forward slashes.** All paths stored in SQLite use `/` separators regardless of OS. Normalize on ingestion. Symlinks are skipped (not followed). See `00_START_HERE.md` Ground Rule 7. |
-| Q14 ✅ | Gotcha retrieval matching strategy? | **Hierarchical directory match + file array match.** Gotchas are retrieved by matching the requested path against the `directory` column (parent prefix match) and `files` array (any file under the path). NOT semantic similarity — no embedding model in MVP. See `03_MCP_TOOL_CONTRACTS.md` "Gotcha Retrieval Strategy". |
-| Q15 ✅ | `linterDetected` storage format? | **JSON array of strings.** e.g., `'["eslint","prettier"]'`. Detected by config file presence (eslint.config.*, .prettierrc*, biome.json, etc.). `null` if none detected. |
-| Q16 ✅ | Schema migration strategy? | **Hand-written SQL migrations, not Drizzle Kit at runtime.** Numbered migration files in `src/db/migrations/`, executed programmatically. Drizzle Kit is dev-only. See `02_DATA_MODEL_AND_SCHEMA.md` "Schema Migration Strategy". |
