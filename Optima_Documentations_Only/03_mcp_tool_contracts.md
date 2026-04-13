@@ -12,13 +12,20 @@ Since early 2026, Claude Code uses **Tool Search** (lazy loading) for MCP tools 
 
 ## Tool Descriptions for Tool Search
 
-Claude Code uses Tool Search (semantic matching on tool names and descriptions) to decide which MCP tools to load. These are the exact `.describe()` strings to use when registering tools with the MCP SDK. Copy verbatim.
+These descriptions are critical for Claude Code's Tool Search system. They determine whether Claude Code finds and invokes Optima's tools. Descriptions must say WHEN to use the tool, not WHAT it does.
 
-| Tool | Registration Name | Description String (copy exactly) |
-| --- | --- | --- |
-| `optima_get_context` | `"optima_get_context"` | `"Get project context, code structure, known errors and fixes, architectural rules, and recent changes for a directory. Lazily re-indexes changed files. Call at the start of any coding task."` |
-| `optima_memorize` | `"optima_memorize"` | `"Store knowledge learned during this session: error fixes, architectural decisions, code patterns, or developer preferences. Call after fixing bugs, making design decisions, or establishing conventions."` |
-| `optima_reindex` | `"optima_reindex"` | `"Force a full project re-index. Use after git clone, branch switch, large merge, or when the index seems stale. Rarely needed — normal indexing is automatic."` |
+| Tool | Description |
+|---|---|
+| `optima_get_context` | `Use before modifying any files in a directory, when encountering an error you haven't seen before, when starting work in a new area of the codebase, or when you need to understand what entities and patterns exist in a directory. Always call this before writing code.` |
+| `optima_memorize` | `Use after fixing any error, after discovering a rule the codebase follows, after noticing a recurring pattern, or when the developer states a preference about how code should be written. Call immediately — do not batch or defer.` |
+| `optima_reindex` | `Use after major refactoring, after adding or removing significant dependencies, after restructuring directories, or when optima_get_context returns stale results that don't match the current file state.` |
+
+**CSO Principles (from Superpowers writing-skills):**
+1. Descriptions = triggering conditions only, NOT workflow summaries
+2. Start with "Use when..." or "Use before/after..."
+3. Include specific symptoms and situations that signal the tool applies
+4. Never summarize the tool's internal process
+5. If the description tells the agent enough to skip calling the tool, the description is wrong
 
 ## MCP Server Bootstrap (`src/index.ts` and `src/server.ts`)
 
@@ -276,6 +283,8 @@ export const MemorizeInputSchema = z.object({
     .describe("The original error message or test failure (for error_fix)"),
   resolution: z.string().optional()
     .describe("What fixed the error (for error_fix)"),
+  rootCause: z.string().max(500).optional()
+    .describe("Why the error occurred — deeper explanation beyond the resolution (for error_fix, optional)"),
   rule: z.string().optional()
     .describe("The rule or decision (for architectural_rule)"),
   rationale: z.string().optional()
@@ -810,6 +819,145 @@ function sanitizeError(error: string): string {
 
 ---
 
+## Verification Requirements
+
+Inspired by Superpowers' verification-before-completion pattern: **evidence before claims, always.**
+
+### optima_memorize Output Verification
+
+After every `optima_memorize` call, the tool output MUST include verification fields:
+
+```typescript
+interface MemorizeVerificationOutput {
+  memory_id: string;              // UUID v4 receipt — proof the record was stored
+  type: MemorizeType;             // echo back the type for confirmation
+  claude_md_regenerated: boolean; // true if CLAUDE.md was rewritten, false if content hash matched
+  claude_md_instruction_count: number; // current total instructions in CLAUDE.md (budget tracking)
+  feedback_rules_written: boolean;    // true if optima-feedback.md was created/updated
+  duplicate_detected: boolean;        // true if a gotcha with the same normalized hash already existed
+}
+```
+
+Claude Code MUST report these fields to the developer. Minimum acceptable report:
+
+```
+✅ Stored error fix (ID: abc-123). CLAUDE.md regenerated (27/35 instructions).
+```
+
+Or if duplicate:
+
+```
+ℹ️ Similar gotcha already exists (ID: existing-456). Hit count incremented. CLAUDE.md unchanged.
+```
+
+### optima_get_context Output Verification
+
+If `optima_get_context` performed re-indexing (files had changed mtimes), the output MUST include:
+
+```typescript
+interface GetContextVerificationFields {
+  files_reindexed: number;    // how many files had changed mtimes and were re-indexed
+  files_removed: number;      // how many deleted files were cleaned from the index
+  reindex_duration_ms: number; // how long re-indexing took
+}
+```
+
+Claude Code SHOULD mention re-indexing if it happened:
+
+```
+🔄 Optima re-indexed 3 changed files in src/auth/ (took 240ms). Context is fresh.
+```
+
+### optima_reindex Output Verification
+
+```typescript
+interface ReindexVerificationOutput {
+  total_files_scanned: number;
+  total_entities_found: number;
+  project_analysis_updated: boolean;
+  claude_md_regenerated: boolean;
+  feedback_rules_written: boolean;
+  duration_ms: number;
+}
+```
+
+Claude Code MUST report:
+
+```
+🔄 Full re-index complete: 142 files, 87 entities (2.3s). CLAUDE.md regenerated.
+```
+
+### The Rule
+
+```
+NO COMPLETION CLAIMS WITHOUT TOOL RESPONSE EVIDENCE.
+```
+
+If Claude Code says "I've updated Optima" or "gotcha stored" without showing the `memory_id` or `claude_md_regenerated` field, it is making an unverified claim. This violates Iron Law 3.
+
+---
+
+## Performance Budgets
+
+### Per-Phase Timing Budgets for optima_get_context
+
+| Phase | Operation | Budget | Notes |
+|---|---|---|---|
+| 1 | Path resolution + traversal validation | 5 ms | Synchronous path.resolve + startsWith check |
+| 2 | Project meta check | 10 ms | Single SQLite query |
+| 3 | File index query (all files under path) | 50 ms | Indexed query on file_index.path |
+| 4-6 | Mtime comparison + re-indexing | 100 ms per changed file | fs.stat is async; Tree-sitter parsing ~50ms per file |
+| 7 | Deleted file cleanup | 20 ms | Batch DELETE with cascade |
+| 8 | Gotcha retrieval (hierarchical match) | 30 ms | Indexed query + hit_count update |
+| 9 | Rules retrieval (directory scoping) | 20 ms | Indexed query with prefix match |
+| 10 | Recent changes collection | 5 ms | In-memory sort of already-collected data |
+| 11 | Output assembly | 10 ms | String concatenation, no LLM |
+| **Total (no re-indexing)** | | **< 150 ms** | Typical case when index is fresh |
+| **Total (10 files re-indexed)** | | **< 1.5 s** | Worst realistic case |
+| **Total (full cold start, 500 files)** | | **< 30 s** | First-ever call on a medium project |
+
+### optima_memorize Budget
+
+| Operation | Budget |
+|---|---|
+| Input validation (Zod) | 2 ms |
+| Error sanitization + normalization (error_fix only) | 10 ms |
+| SQLite insert/upsert | 20 ms |
+| CLAUDE.md regeneration (content hash check first) | 200 ms |
+| **Total** | **< 250 ms** |
+
+### optima_reindex Budget
+
+| Operation | Budget |
+|---|---|
+| Full file walk (500 files) | 5 s |
+| Tree-sitter entity extraction (500 files) | 25 s |
+| Project analysis | 500 ms |
+| CLAUDE.md regeneration | 200 ms |
+| Feedback rules regeneration | 50 ms |
+| **Total** | **< 35 s** |
+
+### Enforcement
+
+Add timing assertions to integration tests:
+
+```typescript
+it('optima_get_context completes within 150ms when index is fresh', async () => {
+  // Pre-populate index, then call get_context
+  const start = performance.now();
+  await handleGetContext({ path: 'src/' });
+  expect(performance.now() - start).toBeLessThan(150);
+});
+
+it('optima_memorize completes within 250ms', async () => {
+  const start = performance.now();
+  await handleMemorize({ type: 'error_fix', error: 'test', resolution: 'test', files: [], directory: 'src/' });
+  expect(performance.now() - start).toBeLessThan(250);
+});
+```
+
+---
+
 ## Error Taxonomy
 
 Every error thrown by Optima must use `OptimaError` with one of these codes:
@@ -841,3 +989,76 @@ Every error thrown by Optima must use `OptimaError` with one of these codes:
 - **Binary files:** Detect by checking if the file extension is in a known set of non-text extensions (`.png`, `.jpg`, `.gif`, `.ico`, `.woff`, `.woff2`, `.ttf`, `.eot`, `.mp3`, `.mp4`, `.zip`, `.tar`, `.gz`, `.pdf`, `.exe`, `.dll`, `.so`, `.dylib`). Skip binary files — do not attempt to read or hash them. If an unknown extension is encountered, read the first 512 bytes and check for null bytes (`\x00`) — if found, treat as binary and skip.
 - **Large files:** Files exceeding 1MB are indexed in `file_index` (path, mtime, size, hash) but skipped for Tree-sitter entity extraction. The hash is computed, but parsing multi-MB files is too slow for the performance budget.
 - **Empty files:** Indexed in `file_index` with a fixed hash (SHA-256 of empty string). Zero entities extracted.
+
+---
+
+## Testing Infrastructure
+
+### DatabaseProvider Interface
+
+For unit testing, tool handlers should accept a `DatabaseProvider` interface rather than calling `getDatabase()` directly. This allows injecting an in-memory SQLite instance for tests.
+
+```typescript
+export interface DatabaseProvider {
+  getDatabase(): Database;
+}
+
+// Production implementation
+export class FileDatabaseProvider implements DatabaseProvider {
+  private db: Database | null = null;
+  
+  getDatabase(): Database {
+    if (!this.db) {
+      this.db = openDatabase(getProjectRoot());
+    }
+    return this.db;
+  }
+}
+
+// Test implementation
+export class InMemoryDatabaseProvider implements DatabaseProvider {
+  private db: Database;
+  
+  constructor() {
+    this.db = new Database(':memory:');
+    runMigrations(this.db);
+  }
+  
+  getDatabase(): Database {
+    return this.db;
+  }
+}
+```
+
+### FileSystemProvider Interface
+
+For unit testing file operations (walker, entity extraction), use a provider that can be mocked:
+
+```typescript
+export interface FileSystemProvider {
+  readFile(path: string): Promise<string>;
+  stat(path: string): Promise<{ mtimeMs: number; isSymbolicLink(): boolean }>;
+  readdir(path: string): Promise<string[]>;
+  exists(path: string): Promise<boolean>;
+}
+```
+
+Production implementation uses `node:fs/promises`. Test implementation uses an in-memory file map.
+
+### Usage in Tool Handlers
+
+```typescript
+// Tool handler accepts providers
+export async function handleGetContext(
+  params: GetContextInput,
+  db: DatabaseProvider = new FileDatabaseProvider(),
+  fs: FileSystemProvider = new NodeFileSystemProvider(),
+): Promise<GetContextOutput> {
+  // ... implementation uses db.getDatabase() and fs.readFile() etc.
+}
+```
+
+This pattern enables:
+- Unit tests with in-memory SQLite (fast, no disk I/O)
+- Unit tests with mock file systems (deterministic, no real project needed)
+- Integration tests with real providers (end-to-end verification)

@@ -1,0 +1,185 @@
+{
+  "description": "Frozen test cases for sanitizeError + normalizeError pipeline. sanitizeError runs FIRST (scrubs sensitive data), then normalizeError strips paths/UUIDs and lowercases.",
+  "version": "1.0.0",
+  "testCases": [
+    {
+      "id": "EN-001",
+      "description": "API key in error (sk- prefix, 35+ chars after prefix)",
+      "input": "Failed to authenticate: invalid key sk-ant-api03-abc123xyz456789012345abcdef6789012345 for project",
+      "afterSanitize": "Failed to authenticate: invalid key <API_KEY_REDACTED> for project",
+      "afterNormalize": "failed to authenticate: invalid key <api_key_redacted> for project",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-002",
+      "description": "JWT in stack trace",
+      "input": "AuthError: token expired eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c at /home/user/src/auth.ts:42:10",
+      "afterSanitize": "AuthError: token expired <JWT_REDACTED> at /home/user/src/auth.ts:42:10",
+      "afterNormalize": "autherror: token expired <jwt_redacted> at <file>:<line>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-003",
+      "description": "Database URL with credentials (PostgreSQL)",
+      "input": "Connection failed: postgresql://admin:supersecretpassword@db.example.com:5432/mydb?sslmode=require",
+      "afterSanitize": "Connection failed: <DB_URL_REDACTED>",
+      "afterNormalize": "connection failed: <db_url_redacted>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-004",
+      "description": "Windows path normalization",
+      "input": "ENOENT: no such file or directory C:\\Users\\john\\projects\\optima\\src\\index.ts",
+      "afterSanitize": "ENOENT: no such file or directory C:\\Users\\john\\projects\\optima\\src\\index.ts",
+      "afterNormalize": "enoent: no such file or directory <file>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-005",
+      "description": "UUID stripping",
+      "input": "Entity not found: 550e8400-e29b-41d4-a716-446655440000 in table users",
+      "afterSanitize": "Entity not found: 550e8400-e29b-41d4-a716-446655440000 in table users",
+      "afterNormalize": "entity not found: <uuid> in table users",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-006",
+      "description": "Bearer token in header dump",
+      "input": "Request headers: Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiam9obiIsInJvbGUiOiJhZG1pbiJ9.signature123abc returned 401",
+      "afterSanitize": "Request headers: Authorization: bearer <REDACTED> returned 401",
+      "afterNormalize": "request headers: authorization: <token> returned 401",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-007",
+      "description": "Clean error (no sensitive data)",
+      "input": "TypeError: Cannot read property 'name' of undefined",
+      "afterSanitize": "TypeError: Cannot read property 'name' of undefined",
+      "afterNormalize": "typeerror: cannot read property 'name' of undefined",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-008",
+      "description": "Equivalent errors with different paths should produce same normalized output and hash",
+      "input": "ENOENT: file not found /home/alice/project/src/utils.ts:15:3",
+      "afterSanitize": "ENOENT: file not found /home/alice/project/src/utils.ts:15:3",
+      "afterNormalize": "enoent: file not found <file>:<line>",
+      "expectedHash": "sha256_of_normalized",
+      "notes": "This should produce the same hash as an error like 'ENOENT: file not found /home/bob/other/lib/helpers.ts:99:1' after normalization, because both normalize to 'enoent: file not found <file>:<line>'"
+    },
+    {
+      "id": "EN-009",
+      "description": "MySQL connection string",
+      "input": "ER_ACCESS_DENIED: Access denied for mysql://root:password123@localhost:3306/testdb",
+      "afterSanitize": "ER_ACCESS_DENIED: Access denied for <DB_URL_REDACTED>",
+      "afterNormalize": "er_access_denied: access denied for <db_url_redacted>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-010",
+      "description": "MongoDB connection string",
+      "input": "MongoNetworkError: failed to connect to mongodb://dbuser:dbpass@cluster0.abc123.mongodb.net:27017/admin?retryWrites=true",
+      "afterSanitize": "MongoNetworkError: failed to connect to <DB_URL_REDACTED>",
+      "afterNormalize": "mongonetworkerror: failed to connect to <db_url_redacted>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-011",
+      "description": "Redis connection URL",
+      "input": "ReplyError: NOAUTH redis://default:mysecretpw@redis-12345.c1.us-east-1-2.ec2.cloud.redislabs.com:12345",
+      "afterSanitize": "ReplyError: NOAUTH <DB_URL_REDACTED>",
+      "afterNormalize": "replyerror: noauth <db_url_redacted>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-012",
+      "description": "Multiple sensitive values in one error",
+      "input": "Auth failed: key=sk-proj-abc123xyz456789012345abcdef67890123456 url=postgresql://admin:secret@db.host:5432/prod at /app/src/db.ts:88:5",
+      "afterSanitize": "Auth failed: key=<API_KEY_REDACTED> url=<DB_URL_REDACTED> at /app/src/db.ts:88:5",
+      "afterNormalize": "auth failed: key=<api_key_redacted> url=<db_url_redacted> at <file>:<line>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-013",
+      "description": "API key with pk- prefix",
+      "input": "Stripe error: invalid publishable key pk-live-abc123xyz456789012345abcdef67890123456 for account",
+      "afterSanitize": "Stripe error: invalid publishable key <API_KEY_REDACTED> for account",
+      "afterNormalize": "stripe error: invalid publishable key <api_key_redacted> for account",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-014",
+      "description": "ISO timestamp stripping",
+      "input": "Request timeout at 2024-03-15T14:30:00.000Z after 30000ms",
+      "afterSanitize": "Request timeout at 2024-03-15T14:30:00.000Z after 30000ms",
+      "afterNormalize": "request timeout at <time> after 30000ms",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-015",
+      "description": "Memory address (0x...) stripping",
+      "input": "Segfault at address 0x7fff5fbff8a0 in module libnode.so",
+      "afterSanitize": "Segfault at address 0x7fff5fbff8a0 in module libnode.so",
+      "afterNormalize": "segfault at address <addr> in module libnode.so",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-016",
+      "description": "Mixed Windows and Unix paths",
+      "input": "Cannot resolve /home/dev/src/module.ts, fallback to C:\\Users\\dev\\backup\\module.ts",
+      "afterSanitize": "Cannot resolve /home/dev/src/module.ts, fallback to C:\\Users\\dev\\backup\\module.ts",
+      "afterNormalize": "cannot resolve <file>, fallback to <file>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-017",
+      "description": "Line:column reference stripping",
+      "input": "SyntaxError: Unexpected token at position 142:7",
+      "afterSanitize": "SyntaxError: Unexpected token at position 142:7",
+      "afterNormalize": "syntaxerror: unexpected token at position <line>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-018",
+      "description": "Whitespace normalization (leading/trailing/multiple spaces)",
+      "input": "   Error:   multiple   spaces   here   ",
+      "afterSanitize": "   Error:   multiple   spaces   here   ",
+      "afterNormalize": "error:   multiple   spaces   here",
+      "expectedHash": "sha256_of_normalized",
+      "notes": "normalizeError trims leading/trailing whitespace. Internal multiple spaces are preserved unless the implementation collapses them."
+    },
+    {
+      "id": "EN-019",
+      "description": "Error with all types of sensitive data combined",
+      "input": "FATAL at 2024-06-01T12:00:00Z: auth=Bearer sk-ant-api03-abc123xyz456789012345abcdef6789012345 jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MX0.aaaaaaaaaaaabbbbbbbbbbbbcccccccccccc db=postgresql://u:p@host:5432/db ref=550e8400-e29b-41d4-a716-446655440000 addr=0x00aabbcc file=/opt/app/main.ts:10:4",
+      "afterSanitize": "FATAL at 2024-06-01T12:00:00Z: auth=bearer <REDACTED> jwt=<JWT_REDACTED> db=<DB_URL_REDACTED> ref=550e8400-e29b-41d4-a716-446655440000 addr=0x00aabbcc file=/opt/app/main.ts:10:4",
+      "afterNormalize": "fatal at <time>: auth=<token> jwt=<jwt_redacted> db=<db_url_redacted> ref=<uuid> addr=<addr> file=<file>:<line>",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-020",
+      "description": "Empty error string",
+      "input": "",
+      "afterSanitize": "",
+      "afterNormalize": "",
+      "expectedHash": "sha256_of_normalized"
+    },
+    {
+      "id": "EN-021",
+      "description": "Error with only whitespace",
+      "input": "     ",
+      "afterSanitize": "     ",
+      "afterNormalize": "",
+      "expectedHash": "sha256_of_normalized",
+      "notes": "normalizeError trims whitespace, so all-whitespace input becomes empty string"
+    },
+    {
+      "id": "EN-022",
+      "description": "API key with key_ prefix pattern",
+      "input": "Config error: secret key_live_abc123xyz456789012345abcdef67890 is expired",
+      "afterSanitize": "Config error: secret <API_KEY_REDACTED> is expired",
+      "afterNormalize": "config error: secret <api_key_redacted> is expired",
+      "expectedHash": "sha256_of_normalized"
+    }
+  ]
+}

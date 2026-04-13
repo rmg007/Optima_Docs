@@ -72,10 +72,22 @@ export const entities = sqliteTable("entities", {
   signature: text("signature"),
   exported: integer("exported", { mode: "boolean" }).notNull().default(false),
   description: text("description"),
+  createdBySession: text("created_by_session"),          // Session ID that first indexed this entity (NULL if from initial scan)
+  lastModifiedContext: text("last_modified_context"),     // Brief context from the memorize call that last touched this entity's file (NULL if never modified via optima_memorize)
 }, (table) => ({
   fileIdx: index("idx_entities_file").on(table.fileId),
   nameIdx: index("idx_entities_name").on(table.name),
 }));
+
+// ── Entity Provenance Tracking ────────────────────────────────
+// When `optima_memorize` is called with an `error_fix` or `pattern` type
+// that includes files in its `files` array, and those files contain entities
+// in the `entities` table, update the `last_modified_context` field on those
+// entities with a brief summary (e.g., "Fixed null reference in auth flow"
+// truncated to 200 chars). This gives future `optima_get_context` calls
+// richer context: instead of "function fetchUser exists at line 42", the
+// context can include "function fetchUser exists at line 42 — last modified
+// to fix null reference in auth flow."
 
 // ── Gotcha Ledger ─────────────────────────────────────────────
 
@@ -84,6 +96,7 @@ export const gotchas = sqliteTable("gotchas", {
   errorText: text("error_text").notNull(),
   errorHash: text("error_hash").notNull(),
   resolution: text("resolution").notNull(),
+  rootCause: text("root_cause"),  // Why the error occurred, not just what fixed it (optional)
   files: text("files").notNull().default("[]"),
   directory: text("directory"),
   tags: text("tags").notNull().default("[]"),
@@ -129,6 +142,30 @@ export const schemaVersion = sqliteTable("schema_version", {
   appliedAt: text("applied_at").notNull().default(sql`(datetime('now'))`),
 });
 ```
+
+---
+
+### Root Cause Tracking (Inspired by Superpowers systematic-debugging)
+
+Gotchas store `errorText` (what happened) and `resolution` (what fixed it). The optional `root_cause` field stores **why it happened** — the deeper explanation that helps future developers understand the error instead of just fixing it.
+
+**Example without root_cause:**
+- Error: `Cannot read property 'id' of undefined`
+- Resolution: `Add null-check after fetchUser()`
+
+**Example with root_cause:**
+- Error: `Cannot read property 'id' of undefined`
+- Resolution: `Add null-check after fetchUser()`
+- Root cause: `Session cookies expire after 30 minutes of inactivity. When a user returns after idle timeout, fetchUser() returns null because the session token is invalid but doesn't throw — it returns undefined silently.`
+
+The root cause transforms a gotcha from "patch this" to "understand this." When Claude Code encounters the same error, it can explain the WHY to the developer, not just apply the fix.
+
+**When to populate:** Claude Code should populate `root_cause` when:
+1. The developer explains WHY an error occurred (not just what to do about it)
+2. Claude Code traces the error through the systematic-debugging 4-phase process and identifies the root cause
+3. The error has a non-obvious cause (the resolution alone wouldn't help someone understand the problem)
+
+`root_cause` is optional. Simple gotchas ("missing semicolon" → "add semicolon") don't need it.
 
 ---
 
@@ -336,7 +373,7 @@ export interface GetContextOutput {
 }
 
 export type MemorizeInput =
-  | { type: "error_fix"; error: string; resolution: string; files?: string[]; directory?: string; tags?: string[] }
+  | { type: "error_fix"; error: string; resolution: string; rootCause?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "architectural_rule"; rule: string; rationale?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "pattern"; pattern: string; example?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "preference"; preference: string; files?: string[]; directory?: string; tags?: string[] };
@@ -390,6 +427,7 @@ export interface GotchaEntry {
   id: number;
   error_text: string;
   resolution: string;
+  root_cause: string | null;
   files: string[];
   directory: string | null;
   hit_count: number;

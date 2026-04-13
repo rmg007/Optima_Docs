@@ -236,11 +236,16 @@ Optima must understand Claude Code's state architecture to operate safely alongs
 
 ## 13. What Optima is NOT
 
-- **Not a code generator.** It generates config and intelligence files.
-- **Not an agent framework.** No CrewAI, no orchestration.
-- **Not a cloud service.** Everything runs locally.
-- **Not an editor extension.** No VS Code dependency.
-- **Not a linter.** It teaches Claude Code the rules, doesn't enforce them.
+- **Not a linter or formatter.** Optima teaches Claude Code the rules via CLAUDE.md; it doesn't enforce them. If the project has ESLint or Prettier, Optima detects them and avoids generating redundant style rules.
+- **Not a code generator.** Optima generates configuration files (CLAUDE.md, feedback rules). It does not write application code.
+- **Not a replacement for CLAUDE.md.** Optima maintains the Optima-owned sections of CLAUDE.md. Developer-written content is preserved and takes priority.
+- **Not a cloud service.** Everything runs locally. No accounts, no sign-up, no data leaves the developer's machine.
+- **Not an agent framework.** No CrewAI, no LangChain, no orchestration. Optima is a simple MCP server with 3 tools.
+- **Not a language server.** Optima uses Tree-sitter for entity extraction but does not provide IDE features (go-to-definition, hover, completions).
+- **Not a replacement for version control.** Optima's `.optima/optima.db` is gitignored. The gotcha ledger is local learning, not shared team knowledge (MVP scope).
+- **Not a multi-language tool (MVP).** MVP supports TypeScript entity extraction only. Other languages are Phase 2+.
+- **Not a background daemon.** Optima only activates when Claude Code calls its tools. It does not watch files, poll, or run background processes.
+- **Not an editor extension.** No VS Code dependency. Optima works with any tool that speaks MCP over stdio.
 
 ## 14. Open Questions — ALL 16 RESOLVED
 

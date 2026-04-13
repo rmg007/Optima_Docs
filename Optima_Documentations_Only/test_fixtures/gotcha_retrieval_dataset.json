@@ -1,0 +1,168 @@
+{
+  "description": "Frozen test cases for gotcha retrieval. Tests hierarchical directory prefix match, file array match, hit_count sorting, and cap behavior.",
+  "version": "1.0.0",
+  "testCases": [
+    {
+      "id": "GR-001",
+      "description": "Exact directory match",
+      "setup": [
+        { "id": "g1", "error_text": "Cannot find module './auth'", "error_hash": "hash_g1", "resolution": "Check import paths in auth module", "files": [], "directory": "src/api/auth/", "hit_count": 5 },
+        { "id": "g2", "error_text": "Timeout on DB query", "error_hash": "hash_g2", "resolution": "Increase connection pool size", "files": [], "directory": "src/db/", "hit_count": 3 }
+      ],
+      "query": { "directory": "src/api/auth/" },
+      "expectedResult": ["g1"],
+      "notes": "Only g1 has an exact directory match for src/api/auth/"
+    },
+    {
+      "id": "GR-002",
+      "description": "Parent directory match (query src/api/auth/, gotcha at src/api/)",
+      "setup": [
+        { "id": "g1", "error_text": "Rate limit exceeded", "error_hash": "hash_g1", "resolution": "Add retry with exponential backoff", "files": [], "directory": "src/api/", "hit_count": 10 },
+        { "id": "g2", "error_text": "CORS error on preflight", "error_hash": "hash_g2", "resolution": "Add CORS middleware", "files": [], "directory": "src/api/", "hit_count": 7 }
+      ],
+      "query": { "directory": "src/api/auth/" },
+      "expectedResult": ["g1", "g2"],
+      "notes": "Both gotchas at src/api/ are parents of query path src/api/auth/, returned sorted by hit_count descending"
+    },
+    {
+      "id": "GR-003",
+      "description": "Project-wide match (directory IS NULL)",
+      "setup": [
+        { "id": "g1", "error_text": "Out of memory", "error_hash": "hash_g1", "resolution": "Increase Node.js heap size with --max-old-space-size", "files": [], "directory": null, "hit_count": 20 },
+        { "id": "g2", "error_text": "Unhandled promise rejection", "error_hash": "hash_g2", "resolution": "Add global rejection handler", "files": [], "directory": null, "hit_count": 15 },
+        { "id": "g3", "error_text": "Type mismatch in api", "error_hash": "hash_g3", "resolution": "Run tsc --strict", "files": [], "directory": "src/api/", "hit_count": 2 }
+      ],
+      "query": { "directory": "src/utils/" },
+      "expectedResult": ["g1", "g2"],
+      "notes": "g1 and g2 have NULL directory so they match any query. g3 is scoped to src/api/ which is not a parent of src/utils/"
+    },
+    {
+      "id": "GR-004",
+      "description": "File array match (gotcha's files array contains a file under query path)",
+      "setup": [
+        { "id": "g1", "error_text": "Import cycle detected", "error_hash": "hash_g1", "resolution": "Break circular dependency by extracting shared types", "files": ["src/models/user.ts", "src/models/order.ts"], "directory": "src/services/", "hit_count": 8 },
+        { "id": "g2", "error_text": "Schema validation failed", "error_hash": "hash_g2", "resolution": "Update Zod schema to match new API response", "files": ["src/models/schema.ts"], "directory": "src/api/", "hit_count": 4 }
+      ],
+      "query": { "directory": "src/models/", "files": ["src/models/user.ts"] },
+      "expectedResult": ["g1"],
+      "notes": "g1 matches because its files array contains src/models/user.ts. g2's file is also under src/models/ but was not in the query files list."
+    },
+    {
+      "id": "GR-005",
+      "description": "Combined directory + file match (dedup by ID)",
+      "setup": [
+        { "id": "g1", "error_text": "Cannot read property of null", "error_hash": "hash_g1", "resolution": "Add null check before accessing user.profile", "files": ["src/api/handlers/user.ts"], "directory": "src/api/", "hit_count": 12 },
+        { "id": "g2", "error_text": "Missing env variable", "error_hash": "hash_g2", "resolution": "Add API_KEY to .env.example", "files": [], "directory": null, "hit_count": 6 }
+      ],
+      "query": { "directory": "src/api/handlers/", "files": ["src/api/handlers/user.ts"] },
+      "expectedResult": ["g1", "g2"],
+      "notes": "g1 matches via both directory prefix (src/api/ is parent of src/api/handlers/) AND file match. It should appear only once. g2 matches via NULL directory."
+    },
+    {
+      "id": "GR-006",
+      "description": "Sort by hit_count descending",
+      "setup": [
+        { "id": "g1", "error_text": "Error A", "error_hash": "hash_g1", "resolution": "Fix A", "files": [], "directory": "src/", "hit_count": 3 },
+        { "id": "g2", "error_text": "Error B", "error_hash": "hash_g2", "resolution": "Fix B", "files": [], "directory": "src/", "hit_count": 15 },
+        { "id": "g3", "error_text": "Error C", "error_hash": "hash_g3", "resolution": "Fix C", "files": [], "directory": "src/", "hit_count": 8 },
+        { "id": "g4", "error_text": "Error D", "error_hash": "hash_g4", "resolution": "Fix D", "files": [], "directory": "src/", "hit_count": 1 }
+      ],
+      "query": { "directory": "src/lib/" },
+      "expectedResult": ["g2", "g3", "g1", "g4"],
+      "notes": "All match via parent directory prefix. Sorted by hit_count: 15, 8, 3, 1"
+    },
+    {
+      "id": "GR-007",
+      "description": "Cap at 10 results (setup 12 gotchas, only 10 returned)",
+      "setup": [
+        { "id": "g01", "error_text": "Error 01", "error_hash": "hash_01", "resolution": "Fix 01", "files": [], "directory": "src/", "hit_count": 12 },
+        { "id": "g02", "error_text": "Error 02", "error_hash": "hash_02", "resolution": "Fix 02", "files": [], "directory": "src/", "hit_count": 11 },
+        { "id": "g03", "error_text": "Error 03", "error_hash": "hash_03", "resolution": "Fix 03", "files": [], "directory": "src/", "hit_count": 10 },
+        { "id": "g04", "error_text": "Error 04", "error_hash": "hash_04", "resolution": "Fix 04", "files": [], "directory": "src/", "hit_count": 9 },
+        { "id": "g05", "error_text": "Error 05", "error_hash": "hash_05", "resolution": "Fix 05", "files": [], "directory": "src/", "hit_count": 8 },
+        { "id": "g06", "error_text": "Error 06", "error_hash": "hash_06", "resolution": "Fix 06", "files": [], "directory": "src/", "hit_count": 7 },
+        { "id": "g07", "error_text": "Error 07", "error_hash": "hash_07", "resolution": "Fix 07", "files": [], "directory": "src/", "hit_count": 6 },
+        { "id": "g08", "error_text": "Error 08", "error_hash": "hash_08", "resolution": "Fix 08", "files": [], "directory": "src/", "hit_count": 5 },
+        { "id": "g09", "error_text": "Error 09", "error_hash": "hash_09", "resolution": "Fix 09", "files": [], "directory": "src/", "hit_count": 4 },
+        { "id": "g10", "error_text": "Error 10", "error_hash": "hash_10", "resolution": "Fix 10", "files": [], "directory": "src/", "hit_count": 3 },
+        { "id": "g11", "error_text": "Error 11", "error_hash": "hash_11", "resolution": "Fix 11", "files": [], "directory": "src/", "hit_count": 2 },
+        { "id": "g12", "error_text": "Error 12", "error_hash": "hash_12", "resolution": "Fix 12", "files": [], "directory": "src/", "hit_count": 1 }
+      ],
+      "query": { "directory": "src/deep/nested/" },
+      "expectedResult": ["g01", "g02", "g03", "g04", "g05", "g06", "g07", "g08", "g09", "g10"],
+      "notes": "All 12 match via parent prefix, but only top 10 by hit_count are returned. g11 and g12 are excluded from results."
+    },
+    {
+      "id": "GR-008",
+      "description": "No matches (query for directory with no relevant gotchas)",
+      "setup": [
+        { "id": "g1", "error_text": "API timeout", "error_hash": "hash_g1", "resolution": "Increase timeout", "files": ["src/api/client.ts"], "directory": "src/api/", "hit_count": 5 },
+        { "id": "g2", "error_text": "DB connection lost", "error_hash": "hash_g2", "resolution": "Add reconnect logic", "files": ["src/db/pool.ts"], "directory": "src/db/", "hit_count": 3 }
+      ],
+      "query": { "directory": "tests/unit/" },
+      "expectedResult": [],
+      "notes": "Neither gotcha's directory is a parent of tests/unit/, and no NULL-directory gotchas exist, so result is empty"
+    },
+    {
+      "id": "GR-009",
+      "description": "Nested directory hierarchy (gotchas at multiple levels)",
+      "setup": [
+        { "id": "g1", "error_text": "Root-level error", "error_hash": "hash_g1", "resolution": "Root fix", "files": [], "directory": null, "hit_count": 1 },
+        { "id": "g2", "error_text": "Src-level error", "error_hash": "hash_g2", "resolution": "Src fix", "files": [], "directory": "src/", "hit_count": 5 },
+        { "id": "g3", "error_text": "Api-level error", "error_hash": "hash_g3", "resolution": "Api fix", "files": [], "directory": "src/api/", "hit_count": 10 },
+        { "id": "g4", "error_text": "Auth-level error", "error_hash": "hash_g4", "resolution": "Auth fix", "files": [], "directory": "src/api/auth/", "hit_count": 15 },
+        { "id": "g5", "error_text": "Unrelated error", "error_hash": "hash_g5", "resolution": "Unrelated fix", "files": [], "directory": "src/db/", "hit_count": 20 }
+      ],
+      "query": { "directory": "src/api/auth/middleware/" },
+      "expectedResult": ["g4", "g3", "g2", "g1"],
+      "notes": "All of g1(NULL), g2(src/), g3(src/api/), g4(src/api/auth/) are ancestors of query. g5(src/db/) is NOT. Sorted by hit_count desc: 15, 10, 5, 1"
+    },
+    {
+      "id": "GR-010",
+      "description": "hit_count incremented for ALL matches (even beyond cap)",
+      "setup": [
+        { "id": "g01", "error_text": "Error 01", "error_hash": "hash_01", "resolution": "Fix 01", "files": [], "directory": "src/", "hit_count": 12 },
+        { "id": "g02", "error_text": "Error 02", "error_hash": "hash_02", "resolution": "Fix 02", "files": [], "directory": "src/", "hit_count": 11 },
+        { "id": "g03", "error_text": "Error 03", "error_hash": "hash_03", "resolution": "Fix 03", "files": [], "directory": "src/", "hit_count": 10 },
+        { "id": "g04", "error_text": "Error 04", "error_hash": "hash_04", "resolution": "Fix 04", "files": [], "directory": "src/", "hit_count": 9 },
+        { "id": "g05", "error_text": "Error 05", "error_hash": "hash_05", "resolution": "Fix 05", "files": [], "directory": "src/", "hit_count": 8 },
+        { "id": "g06", "error_text": "Error 06", "error_hash": "hash_06", "resolution": "Fix 06", "files": [], "directory": "src/", "hit_count": 7 },
+        { "id": "g07", "error_text": "Error 07", "error_hash": "hash_07", "resolution": "Fix 07", "files": [], "directory": "src/", "hit_count": 6 },
+        { "id": "g08", "error_text": "Error 08", "error_hash": "hash_08", "resolution": "Fix 08", "files": [], "directory": "src/", "hit_count": 5 },
+        { "id": "g09", "error_text": "Error 09", "error_hash": "hash_09", "resolution": "Fix 09", "files": [], "directory": "src/", "hit_count": 4 },
+        { "id": "g10", "error_text": "Error 10", "error_hash": "hash_10", "resolution": "Fix 10", "files": [], "directory": "src/", "hit_count": 3 },
+        { "id": "g11", "error_text": "Error 11", "error_hash": "hash_11", "resolution": "Fix 11", "files": [], "directory": "src/", "hit_count": 2 },
+        { "id": "g12", "error_text": "Error 12", "error_hash": "hash_12", "resolution": "Fix 12", "files": [], "directory": "src/", "hit_count": 1 }
+      ],
+      "query": { "directory": "src/lib/" },
+      "expectedResult": ["g01", "g02", "g03", "g04", "g05", "g06", "g07", "g08", "g09", "g10"],
+      "expectedHitCountIncrements": ["g01", "g02", "g03", "g04", "g05", "g06", "g07", "g08", "g09", "g10", "g11", "g12"],
+      "notes": "Only top 10 are returned, but ALL 12 matching gotchas should have their hit_count incremented (g11 goes from 2->3, g12 goes from 1->2)"
+    },
+    {
+      "id": "GR-011",
+      "description": "Multiple gotchas at same directory, different hit_counts",
+      "setup": [
+        { "id": "g1", "error_text": "Null pointer in handler", "error_hash": "hash_g1", "resolution": "Add null guard", "files": [], "directory": "src/api/", "hit_count": 25 },
+        { "id": "g2", "error_text": "Missing header X-Request-ID", "error_hash": "hash_g2", "resolution": "Add default header middleware", "files": [], "directory": "src/api/", "hit_count": 10 },
+        { "id": "g3", "error_text": "JSON parse error in body", "error_hash": "hash_g3", "resolution": "Add try-catch around JSON.parse", "files": [], "directory": "src/api/", "hit_count": 50 },
+        { "id": "g4", "error_text": "Route not found 404", "error_hash": "hash_g4", "resolution": "Register route before catch-all", "files": [], "directory": "src/api/", "hit_count": 5 }
+      ],
+      "query": { "directory": "src/api/" },
+      "expectedResult": ["g3", "g1", "g2", "g4"],
+      "notes": "All at same directory, sorted by hit_count: 50, 25, 10, 5"
+    },
+    {
+      "id": "GR-012",
+      "description": "File match across different directories",
+      "setup": [
+        { "id": "g1", "error_text": "Import error in shared utils", "error_hash": "hash_g1", "resolution": "Use absolute import path", "files": ["src/shared/utils.ts", "src/api/helpers.ts"], "directory": "src/shared/", "hit_count": 7 },
+        { "id": "g2", "error_text": "Type error in helpers", "error_hash": "hash_g2", "resolution": "Fix return type annotation", "files": ["src/api/helpers.ts"], "directory": "src/api/", "hit_count": 3 },
+        { "id": "g3", "error_text": "Missing export in utils", "error_hash": "hash_g3", "resolution": "Add named export", "files": ["src/shared/utils.ts", "lib/format.ts"], "directory": "lib/", "hit_count": 12 }
+      ],
+      "query": { "directory": "src/api/", "files": ["src/api/helpers.ts"] },
+      "expectedResult": ["g1", "g2"],
+      "notes": "g1 matches via file array containing src/api/helpers.ts (hit_count 7). g2 matches via exact directory src/api/ AND file match (hit_count 3). g3 has directory lib/ which is not a parent of src/api/ and its files don't include src/api/helpers.ts, so no match. Sorted by hit_count: 7, 3."
+    }
+  ]
+}

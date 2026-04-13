@@ -1,0 +1,126 @@
+{
+  "description": "Frozen test cases for rules directory scoping precedence. Tests NULL (project-wide) rules, exact matches, prefix matches, and ordering.",
+  "version": "1.0.0",
+  "testCases": [
+    {
+      "id": "DS-001",
+      "description": "NULL directory rule (project-wide) matches any query",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "Always use TypeScript strict mode", "directory": null, "created_at": "2024-01-01T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/auth/" },
+      "expectedResult": ["r1"],
+      "notes": "NULL directory means project-wide scope, matches any query directory"
+    },
+    {
+      "id": "DS-002",
+      "description": "Exact directory match",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "Use Zod for request validation", "directory": "src/api/", "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "Use Jest for testing", "directory": "tests/", "created_at": "2024-01-01T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/" },
+      "expectedResult": ["r1"],
+      "notes": "Only r1 matches the exact directory src/api/"
+    },
+    {
+      "id": "DS-003",
+      "description": "Parent prefix match (rule at src/, query for src/api/)",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "Use ESM imports only", "directory": "src/", "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "Use CommonJS requires", "directory": "lib/", "created_at": "2024-01-01T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/" },
+      "expectedResult": ["r1"],
+      "notes": "r1 at src/ is a prefix of src/api/, so it matches. r2 at lib/ does not match."
+    },
+    {
+      "id": "DS-004",
+      "description": "Most-specific-first ordering",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "General src rule", "directory": "src/", "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "API-specific rule", "directory": "src/api/", "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r3", "type": "always", "content": "Auth-specific rule", "directory": "src/api/auth/", "created_at": "2024-01-01T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/auth/" },
+      "expectedResult": ["r3", "r2", "r1"],
+      "notes": "All three match. Ordered most-specific-first: src/api/auth/ (exact), then src/api/ (parent), then src/ (grandparent)"
+    },
+    {
+      "id": "DS-005",
+      "description": "Multiple rules at different scoping levels",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "Project-wide: use prettier", "directory": null, "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "Src: use strict TypeScript", "directory": "src/", "created_at": "2024-01-02T00:00:00Z" },
+        { "id": "r3", "type": "always", "content": "API: validate all inputs", "directory": "src/api/", "created_at": "2024-01-03T00:00:00Z" },
+        { "id": "r4", "type": "always", "content": "Tests: use describe/it blocks", "directory": "tests/", "created_at": "2024-01-04T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/handlers/" },
+      "expectedResult": ["r3", "r2", "r1"],
+      "notes": "r3 (src/api/) is most specific match, then r2 (src/), then r1 (NULL/project-wide). r4 (tests/) does not match."
+    },
+    {
+      "id": "DS-006",
+      "description": "No matching rules (query for unscoped directory)",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "API rule", "directory": "src/api/", "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "DB rule", "directory": "src/db/", "created_at": "2024-01-01T00:00:00Z" }
+      ],
+      "query": { "directory": "scripts/deploy/" },
+      "expectedResult": [],
+      "notes": "Neither rule's directory is a prefix of scripts/deploy/ and there are no project-wide (NULL) rules"
+    },
+    {
+      "id": "DS-007",
+      "description": "Mixed project-wide and directory-scoped rules",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "Global: no console.log", "directory": null, "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "Global: use async/await", "directory": null, "created_at": "2024-01-02T00:00:00Z" },
+        { "id": "r3", "type": "always", "content": "API: use express router", "directory": "src/api/", "created_at": "2024-01-03T00:00:00Z" },
+        { "id": "r4", "type": "always", "content": "DB: use transactions", "directory": "src/db/", "created_at": "2024-01-04T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/v2/" },
+      "expectedResult": ["r3", "r2", "r1"],
+      "notes": "r3 matches via prefix (most specific). r1 and r2 match via NULL (project-wide). Within the NULL scope, r2 (newer created_at) comes before r1."
+    },
+    {
+      "id": "DS-008",
+      "description": "Rules sorted by created_at DESC within same scope",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "First rule added", "directory": "src/api/", "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "Second rule added", "directory": "src/api/", "created_at": "2024-02-15T00:00:00Z" },
+        { "id": "r3", "type": "always", "content": "Third rule added", "directory": "src/api/", "created_at": "2024-06-01T00:00:00Z" },
+        { "id": "r4", "type": "always", "content": "Fourth rule added", "directory": "src/api/", "created_at": "2024-03-10T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/" },
+      "expectedResult": ["r3", "r4", "r2", "r1"],
+      "notes": "All rules at same directory scope. Sorted by created_at DESC: 2024-06-01 (r3), 2024-03-10 (r4), 2024-02-15 (r2), 2024-01-01 (r1)"
+    },
+    {
+      "id": "DS-009",
+      "description": "Deep nesting (4 levels of directories)",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "Level 0: project-wide", "directory": null, "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "Level 1: src/", "directory": "src/", "created_at": "2024-01-02T00:00:00Z" },
+        { "id": "r3", "type": "always", "content": "Level 2: src/api/", "directory": "src/api/", "created_at": "2024-01-03T00:00:00Z" },
+        { "id": "r4", "type": "always", "content": "Level 3: src/api/v2/", "directory": "src/api/v2/", "created_at": "2024-01-04T00:00:00Z" },
+        { "id": "r5", "type": "always", "content": "Level 4: src/api/v2/handlers/", "directory": "src/api/v2/handlers/", "created_at": "2024-01-05T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/v2/handlers/auth/" },
+      "expectedResult": ["r5", "r4", "r3", "r2", "r1"],
+      "notes": "All 5 rules match at increasing scoping levels. Most specific first: r5 (src/api/v2/handlers/), r4 (src/api/v2/), r3 (src/api/), r2 (src/), r1 (NULL)"
+    },
+    {
+      "id": "DS-010",
+      "description": "Rule at exact path takes precedence over parent",
+      "setup": [
+        { "id": "r1", "type": "always", "content": "Parent rule: use REST conventions", "directory": "src/api/", "created_at": "2024-01-01T00:00:00Z" },
+        { "id": "r2", "type": "always", "content": "Exact rule: use GraphQL here", "directory": "src/api/graphql/", "created_at": "2024-01-02T00:00:00Z" },
+        { "id": "r3", "type": "always", "content": "Another parent: error handling", "directory": "src/", "created_at": "2024-01-03T00:00:00Z" }
+      ],
+      "query": { "directory": "src/api/graphql/" },
+      "expectedResult": ["r2", "r1", "r3"],
+      "notes": "r2 is the exact match so it comes first. r1 (src/api/) is next most specific parent. r3 (src/) is the least specific parent. Most-specific-first ordering."
+    }
+  ]
+}

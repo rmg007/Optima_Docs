@@ -1,0 +1,215 @@
+{
+  "description": "Frozen test cases for extractEntities() Tree-sitter parsing. Covers all 12 spec edge cases plus additional scenarios.",
+  "version": "1.0.0",
+  "testCases": [
+    {
+      "id": "EE-001",
+      "description": "Async exported function",
+      "input": "export async function fetchUser(id: string): Promise<User> {\n  return await db.users.findOne(id);\n}",
+      "expectedEntities": [
+        {
+          "name": "fetchUser",
+          "kind": "function",
+          "exported": true,
+          "signature": "async function fetchUser(id: string): Promise<User>"
+        }
+      ]
+    },
+    {
+      "id": "EE-002",
+      "description": "Arrow function export (const = arrow)",
+      "input": "export const handleRequest = async (req: Request, res: Response): Promise<void> => {\n  res.json({ ok: true });\n};",
+      "expectedEntities": [
+        {
+          "name": "handleRequest",
+          "kind": "function",
+          "exported": true,
+          "signature": "const handleRequest = async (req: Request, res: Response): Promise<void> => ..."
+        }
+      ]
+    },
+    {
+      "id": "EE-003",
+      "description": "Default export class",
+      "input": "export default class UserService {\n  constructor(private db: Database) {}\n  async getUser(id: string) { return this.db.find(id); }\n}",
+      "expectedEntities": [
+        {
+          "name": "UserService",
+          "kind": "class",
+          "exported": true
+        }
+      ]
+    },
+    {
+      "id": "EE-004",
+      "description": "Declare statement (produces empty entities per spec)",
+      "input": "declare module 'express' {\n  interface Request {\n    user?: User;\n  }\n}",
+      "expectedEntities": []
+    },
+    {
+      "id": "EE-005",
+      "description": "Namespace (produces empty entities per spec)",
+      "input": "namespace Utils {\n  export function helper() { return true; }\n  export function format(s: string) { return s.trim(); }\n}",
+      "expectedEntities": []
+    },
+    {
+      "id": "EE-006",
+      "description": "Enum export (extracted as kind 'type', not 'enum')",
+      "input": "export enum Status {\n  Active = 'active',\n  Inactive = 'inactive',\n  Pending = 'pending'\n}",
+      "expectedEntities": [
+        {
+          "name": "Status",
+          "kind": "type",
+          "exported": true
+        }
+      ]
+    },
+    {
+      "id": "EE-007",
+      "description": "Class with getter/setter (class entity + get_/set_ function entities)",
+      "input": "export class Config {\n  private _name: string = '';\n  get name(): string { return this._name; }\n  set name(value: string) { this._name = value; }\n}",
+      "expectedEntities": [
+        {
+          "name": "Config",
+          "kind": "class",
+          "exported": true
+        },
+        {
+          "name": "get_name",
+          "kind": "function",
+          "exported": true,
+          "signature": "get name(): string"
+        },
+        {
+          "name": "set_name",
+          "kind": "function",
+          "exported": true,
+          "signature": "set name(value: string)"
+        }
+      ]
+    },
+    {
+      "id": "EE-008",
+      "description": "Re-export with source (export { X } from './y' -- skipped per spec since it has source)",
+      "input": "export { UserService } from './services/user';\nexport { AuthHelper, TokenManager } from './auth';",
+      "expectedEntities": []
+    },
+    {
+      "id": "EE-009",
+      "description": "Generic interface",
+      "input": "export interface Repository<T extends Entity> {\n  findById(id: string): Promise<T | null>;\n  save(entity: T): Promise<T>;\n  delete(id: string): Promise<void>;\n}",
+      "expectedEntities": [
+        {
+          "name": "Repository",
+          "kind": "type",
+          "exported": true,
+          "signature": "interface Repository<T extends Entity>"
+        }
+      ]
+    },
+    {
+      "id": "EE-010",
+      "description": "Overloaded function (only implementation with body is extracted, overload signatures skipped)",
+      "input": "export function parse(input: string): AST;\nexport function parse(input: Buffer): AST;\nexport function parse(input: string | Buffer): AST {\n  if (typeof input === 'string') return parseString(input);\n  return parseBuffer(input);\n}",
+      "expectedEntities": [
+        {
+          "name": "parse",
+          "kind": "function",
+          "exported": true,
+          "signature": "function parse(input: string | Buffer): AST"
+        }
+      ]
+    },
+    {
+      "id": "EE-011",
+      "description": "Regular class (not exported)",
+      "input": "class InternalCache {\n  private store = new Map<string, unknown>();\n  get(key: string) { return this.store.get(key); }\n  set(key: string, value: unknown) { this.store.set(key, value); }\n}",
+      "expectedEntities": [
+        {
+          "name": "InternalCache",
+          "kind": "class",
+          "exported": false
+        }
+      ]
+    },
+    {
+      "id": "EE-012",
+      "description": "Type alias",
+      "input": "export type UserID = string & { readonly __brand: 'UserID' };",
+      "expectedEntities": [
+        {
+          "name": "UserID",
+          "kind": "type",
+          "exported": true,
+          "signature": "type UserID = string & { readonly __brand: 'UserID' }"
+        }
+      ]
+    },
+    {
+      "id": "EE-013",
+      "description": "Multiple declarations in one file",
+      "input": "export interface Logger {\n  info(msg: string): void;\n  error(msg: string): void;\n}\n\nexport function createLogger(name: string): Logger {\n  return { info: console.log, error: console.error };\n}\n\nexport const DEFAULT_LEVEL = 'info';\n\nfunction internalHelper() { return true; }",
+      "expectedEntities": [
+        {
+          "name": "Logger",
+          "kind": "type",
+          "exported": true,
+          "signature": "interface Logger"
+        },
+        {
+          "name": "createLogger",
+          "kind": "function",
+          "exported": true,
+          "signature": "function createLogger(name: string): Logger"
+        },
+        {
+          "name": "DEFAULT_LEVEL",
+          "kind": "function",
+          "exported": true,
+          "signature": "const DEFAULT_LEVEL = 'info'"
+        },
+        {
+          "name": "internalHelper",
+          "kind": "function",
+          "exported": false,
+          "signature": "function internalHelper()"
+        }
+      ]
+    },
+    {
+      "id": "EE-014",
+      "description": "Anonymous default export (should be skipped -- no name to extract)",
+      "input": "export default function() {\n  return { version: '1.0.0' };\n}",
+      "expectedEntities": []
+    },
+    {
+      "id": "EE-015",
+      "description": "Local re-export without source (export { foo, bar } -- produces kind 'export' entities)",
+      "input": "function foo() { return 1; }\nfunction bar() { return 2; }\n\nexport { foo, bar };",
+      "expectedEntities": [
+        {
+          "name": "foo",
+          "kind": "function",
+          "exported": false,
+          "signature": "function foo()"
+        },
+        {
+          "name": "bar",
+          "kind": "function",
+          "exported": false,
+          "signature": "function bar()"
+        },
+        {
+          "name": "foo",
+          "kind": "export",
+          "exported": true
+        },
+        {
+          "name": "bar",
+          "kind": "export",
+          "exported": true
+        }
+      ]
+    }
+  ]
+}

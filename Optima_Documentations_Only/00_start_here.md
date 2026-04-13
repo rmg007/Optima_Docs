@@ -158,6 +158,59 @@ bun add -d @types/better-sqlite3 drizzle-kit tsup typescript vitest
 
 ---
 
+## Canonical Module Map
+
+Every module is referenced by these paths across the corpus. If a stale document references a different structure, trust this table.
+
+| File Path | Purpose | Specified In |
+|---|---|---|
+| `src/index.ts` | Entry point — creates and starts MCP server | Doc 03 |
+| `src/server.ts` | Tool registration and dispatch | Doc 03 |
+| `src/schemas.ts` | Zod input/output schemas for all 3 tools | Doc 03 |
+| `src/types.ts` | TypeScript interfaces, OptimaError class, error codes | Doc 02 |
+| `src/tools/get-context.ts` | optima_get_context implementation (11-step behavior) | Doc 03 |
+| `src/tools/memorize.ts` | optima_memorize implementation | Doc 03 |
+| `src/tools/reindex.ts` | optima_reindex implementation | Doc 03 |
+| `src/indexer/project-analyzer.ts` | Tech stack detection, command discovery, linter detection | Doc 02 |
+| `src/indexer/file-indexer.ts` | File walking, mtime checking, hash computation | Doc 03 |
+| `src/indexer/entity-extractor.ts` | Tree-sitter AST parsing → entities | Doc 03 |
+| `src/memory/gotcha-ledger.ts` | Error → solution CRUD with hierarchical matching | Doc 03 |
+| `src/memory/rules-store.ts` | Architectural rules CRUD with directory scoping | Doc 03 |
+| `src/memory/error-normalizer.ts` | sanitizeError + normalizeError pipeline for dedup | Doc 03 |
+| `src/generator/claude-md.ts` | CLAUDE.md generation with section markers | Doc 04 |
+| `src/generator/feedback-rules.ts` | .claude/rules/optima-feedback.md generation | Doc 04 |
+| `src/db/schema.ts` | Drizzle schema (7 tables) | Doc 02 |
+| `src/db/migrations.ts` | Schema versioning and migration runner | Doc 02 |
+| `src/db/migrations/001_initial.ts` | Initial migration — CREATE TABLE for all 7 tables | Doc 02 |
+| `src/db/migrations/index.ts` | Exports ordered migration list | Doc 02 |
+| `src/db/connection.ts` | Database lifecycle (lazy init, WAL, corruption recovery) | Doc 03 |
+| `src/utils/hasher.ts` | SHA-256 content hashing | Doc 01 |
+| `src/utils/paths.ts` | Path normalization, .gitignore matching | Doc 00 (Ground Rule 7) |
+| `src/utils/errors.ts` | Error taxonomy (OptimaError) | Doc 03 |
+
+---
+
+## DO NOT IMPLEMENT — Superseded Content
+
+If any pre-review-pass version of a section conflicts with the current docs, the current docs win. The following content areas were revised during the first review pass (Q12–Q16 additions). If you encounter older versions:
+
+| Topic | Old Location/State | Current Canonical Location |
+|---|---|---|
+| DB initialization timing | Previously unspecified | Doc 02 "Database Initialization & Lifecycle" section |
+| Path normalization | Previously unspecified | Doc 00 Ground Rule 7 + Doc 03 tool step 1 |
+| Gotcha retrieval strategy | Previously unspecified | Doc 03 "Gotcha Retrieval Strategy" section |
+| linterDetected format | Previously ambiguous | Doc 02 field comment on projectMeta table |
+| Schema migration strategy | Previously unspecified | Doc 02 "Schema Migration Strategy" section |
+| Cold start bootstrap | Previously unspecified | Doc 01 "Cold Start Bootstrap Sequence" (8 steps) |
+| Entity extraction edge cases | Previously incomplete | Doc 03 "Entity Extraction Edge Cases" list (12 cases) |
+| Malformed marker handling | Previously unspecified | Doc 04 "Malformed marker handling" section |
+| Preferences section | Previously missing | Doc 04 "Section: preferences" template |
+| CLAUDE.md regeneration triggers | Previously limited to project-wide rules only | Doc 03 step 5 + Doc 04 header (all memorize types trigger regeneration) |
+| Error sanitization | Previously absent | Doc 03 sanitizeError() function (runs before normalization and storage) |
+| Schemas file location | Previously implicit | Doc 03 server.ts imports from `./schemas.js` — create `src/schemas.ts` |
+
+---
+
 ## Ground Rules
 
 1. **No file exceeds 300 lines.** Split into separate modules if approaching the limit.
