@@ -177,7 +177,7 @@ optima/
 - `optima_get_context` with lazy re-indexing via mtime checks
 - `optima_memorize` with unified input (error_fix, architectural_rule, pattern, preference)
 - `optima_reindex` for full project re-index
-- Project analyzer: detect tech stack, build/test/lint commands, project domain/purpose (from README/package.json description), and linter/formatter presence (ESLint, Prettier, Biome — suppresses style rules in generated [CLAUDE.md](http://CLAUDE.md))
+- Project analyzer: detect tech stack, build/test/lint commands, project domain/purpose (from README/package.json description), and linter/formatter presence (see authoritative list in `02_DATA_MODEL_AND_SCHEMA.md` — suppresses style rules in generated [CLAUDE.md](http://CLAUDE.md))
 - File indexer: walk project (respecting .gitignore), track mtimes, compute hashes
 - Entity extractor: Tree-sitter parsing for TypeScript (functions, classes, interfaces, types, exports)
 - Gotcha Ledger: error → solution storage with normalized dedup

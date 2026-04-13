@@ -242,11 +242,25 @@ Optima must understand Claude Code's state architecture to operate safely alongs
 - **Not an editor extension.** No VS Code dependency.
 - **Not a linter.** It teaches Claude Code the rules, doesn't enforce them.
 
-## 14. Open Questions — ALL RESOLVED
+## 14. Open Questions — ALL 16 RESOLVED
 
-**All 11 questions resolved on April 12, 2026. These are now binding design decisions.**
+**All 16 questions resolved on April 12, 2026. These are binding design decisions.**
 
-**Additional questions (from Claude Code state architecture review):**
-
-- **Q10:** ✅ **RESOLVED.** When Phase 2 generates hooks into `.claude/settings.json`, Optima reads existing JSON, deep-merges its hooks into the `hooks` object, and preserves all non-Optima entries. Never overwrites the full file.
-- **Q11:** ✅ **RESOLVED.** Defer enterprise-managed detection until team features are in scope. For now, the rules-based inception pattern (MVP) remains the primary feedback mechanism — hooks are a best-effort Phase 2 enhancement.
+| Q | Topic | Decision | Scope | Enforced In |
+|---|-------|----------|-------|------------|
+| Q1 | Auto-generate on cold start? | YES — first `optima_get_context` triggers full init. 2s cold start acceptable for plug-and-play. | MVP | 01 (Cold Start Sequence), 02 (DB Init), 03 (tool step 1) |
+| Q2 | Existing CLAUDE.md handling? | Append below markers, never touch content above first marker or outside markers. | MVP | 04 (Regeneration Logic step 4) |
+| Q3 | Error dedup via hash collision? | Normalize for hash, store sanitized original. On collision: store both entries, emit `HASH_COLLISION` warning. | MVP | 03 (normalizeError, sanitizeError, error taxonomy) |
+| Q4 | hit_count threshold for CLAUDE.md? | `hit_count >= 2` = proven value. Gotchas with `hit_count < 2` excluded from CLAUDE.md generation. Additionally, gotchas with `hit_count = 0` older than 30 days excluded entirely. | MVP | 04 (necessity test, instruction budget enforcement) |
+| Q5 | .gitignore parsing? | `ignore` npm package (^7.0.0). Never hand-rolled regex. | MVP | 00 (Tech Stack), 03 (gitignore exclusions) |
+| Q6 | Bun vs Node SQLite? | `better-sqlite3` for runtime portability (works on both Bun and Node). If Bun is proven reliable, swap to `bun:sqlite` later. | MVP | 00 (Tech Stack, DO NOT), 02 (driver note) |
+| Q7 | Domain detection? | Dependency + directory signals (both required). | Phase 2 | Product Spec only |
+| Q8 | Agent tools? | Explicit allowlists per agent. | Phase 2 | Product Spec only |
+| Q9 | Token budget? | chars / 4 approximation. | Phase 2 | Product Spec only |
+| Q10 | JSON merge for hooks? | Deep-merge into `.claude/settings.json` hooks object. Preserve all non-Optima entries. Never overwrite full file. | Phase 2 | Product Spec section 12 |
+| Q11 | Enterprise detection? | Defer. Rules-based inception (MVP) is primary. Hooks are best-effort Phase 2 enhancement. | Phase 2 | Product Spec section 12 |
+| Q12 | DB init timing? | Lazy — deferred to first tool call. MCP server starts immediately on stdio, DB created on first `optima_get_context`. | MVP | 02 (DB Init & Lifecycle), 01 (Cold Start step 3) |
+| Q13 | Path normalization? | Always forward slashes in SQLite and tool output. Normalize on ingestion via `path.replace(/\\\\/g, '/')`. Symlinks skipped via `fs.lstat`. | MVP | 00 (Ground Rule 7), 03 (tool step 1) |
+| Q14 | Gotcha retrieval? | Hierarchical directory prefix match + file array match. Dedup by ID, sort by `hit_count` desc, cap at 10. | MVP | 03 (Gotcha Retrieval Strategy) |
+| Q15 | linterDetected format? | JSON array of strings (e.g., `'["eslint","prettier"]'`). null if none detected. | MVP | 02 (field comment on projectMeta) |
+| Q16 | Schema migration? | Hand-written SQL in `src/db/migrations/`, numbered files (`001_initial.ts`), programmatic runner with transactions. Drizzle Kit dev-only. | MVP | 02 (Schema Migration Strategy) |

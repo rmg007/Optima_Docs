@@ -41,7 +41,7 @@ export const projectMeta = sqliteTable("project_meta", {
   testCommand: text("test_command"),
   lintCommand: text("lint_command"),
   projectPurpose: text("project_purpose"),
-  linterDetected: text("linter_detected"), // JSON array of strings, e.g. '["eslint","prettier"]'. Detected config files: eslint.config.*, .eslintrc.*, .prettierrc*, biome.json, ruff.toml, pyproject.toml [tool.ruff], .editorconfig. null if none detected.
+  linterDetected: text("linter_detected"), // JSON array of strings, e.g. '["eslint","prettier"]'. See AUTHORITATIVE linter config list below. null if none detected.
   lastFullIndex: text("last_full_index"),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
 });
@@ -132,6 +132,28 @@ export const schemaVersion = sqliteTable("schema_version", {
 
 ---
 
+## Authoritative Linter/Formatter Config Detection List
+
+This is the **single source of truth** for which config files Optima checks when populating `projectMeta.linterDetected`. All docs reference this list. MVP supports TypeScript projects, but detects all linters for completeness (a TypeScript project may use `.editorconfig` or have Python tooling in a monorepo).
+
+| Linter/Formatter | Config File Glob | Stored As |
+| --- | --- | --- |
+| ESLint | `eslint.config.*`, `.eslintrc.*`, `.eslintrc` | `"eslint"` |
+| Prettier | `.prettierrc*`, `prettier.config.*` | `"prettier"` |
+| Biome | `biome.json`, `biome.jsonc` | `"biome"` |
+| EditorConfig | `.editorconfig` | `"editorconfig"` |
+| Ruff (Python) | `ruff.toml`, `pyproject.toml` with `[tool.ruff]` | `"ruff"` |
+
+**Detection algorithm (in `src/indexer/project-analyzer.ts`):**
+1. For each config pattern above, check if matching file exists at project root (one level only, no recursive search).
+2. Special case for `pyproject.toml`: read file content, check if `[tool.ruff]` section exists before adding `"ruff"`.
+3. Collect matching linter names into a JSON array. Store as `'["eslint","prettier"]'` in `projectMeta.linterDetected`.
+4. If no linter configs found, store `null`.
+
+**Impact on CLAUDE.md generation:** When `linterDetected` is non-null, the necessity test in Doc 04 excludes formatting/style rules from the `architecture_rules` section (the linter already enforces them).
+
+---
+
 ## TypeScript Interfaces
 
 Copy into `src/types.ts` verbatim.
@@ -181,7 +203,7 @@ export interface ProjectSummary {
   name: string;
   purpose: string | null;
   tech_stack: string[];
-  linter_detected: string | null;
+  linter_detected: string[] | null; // Parsed from JSON string in DB. null if no linters detected. See authoritative list above.
   build_command: string | null;
   test_command: string | null;
   lint_command: string | null;
@@ -260,7 +282,7 @@ export class OptimaError extends Error {
 - **Entities:** Cascade-deleted with their parent file_index row.
 - **Gotchas:** Keep all. `hit_count` tracks usefulness. `updated_at` is refreshed each time `hit_count` increments, making it usable as a "last hit" proxy for the necessity test filter during [CLAUDE.md](http://CLAUDE.md) generation (MVP: exclude gotchas where `hit_count = 0` AND `created_at` is older than 30 days).
 - **Rules:** Keep all. Manual pruning via future tooling.
-- **Generation log:** Keep last 50 entries per file path. Prune on database initialization.
+- **Generation log:** Keep last 50 entries per file path. Prune during `getDatabase()` initialization (runs once on cold start, not on every tool call). SQL: `DELETE FROM generation_log WHERE id NOT IN (SELECT id FROM generation_log WHERE file_path = ? ORDER BY generated_at DESC LIMIT 50)` for each distinct `file_path`.
 
 ## Schema Migration Strategy
 

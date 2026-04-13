@@ -54,18 +54,24 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
 
 ### 5. MCP Tool Specifications
 - For each of 3 tools:
-  - Tool description string (for Tool Search)
+  - **Tool description string for Tool Search** (copy exact `.describe()` strings from Doc 03 "Tool Descriptions for Tool Search" table)
+  - **Registration example** showing how to register with MCP SDK
   - Zod input/output schemas (copy verbatim from 03)
   - Step-by-step internal behavior
   - Error codes it throws
   - Performance budgets
 
+- **Path traversal validation:** Resolved path must start with project root — reject `../../.ssh/` style escapes
 - **Gotcha Retrieval Strategy (Q14):** Hierarchical directory prefix match + file array match, dedup by ID, sorted by hit_count desc, capped at 10
 - **Directory Scoping Precedence:** NULL (project-wide) → parent prefix → most specific first
 - **Entity Extraction Edge Cases:** async, arrow, default exports, re-exports, overloads, getters/setters, declare (skip), namespace (skip), generics, enums
-- **Error Normalization:** Include Windows path stripping, UUID stripping
+- **Tree-sitter Query Patterns:** Copy S-expression queries from Doc 03 (scheme syntax for function_declaration, class_declaration, etc.)
+- **Error Sanitization:** `sanitizeError()` function runs BEFORE normalization, BEFORE storage — scrubs API keys, JWTs, DB URLs, bearer tokens
+- **Error Normalization:** `normalizeError()` function — includes Windows path stripping, UUID stripping
 - **memory_id semantics:** Random UUID v4 per call, NOT database row ID, is a receipt, not stored
 - **recent_changes definition:** Files re-indexed in this call, sorted by mtime desc, capped at 20, empty on cold start
+- **CLAUDE.md regeneration triggers:** After EVERY `optima_memorize` call (all types), after `optima_reindex`, and on cold start. Content hash prevents unnecessary writes.
+- **optima_reindex side effects:** Re-runs project analysis, triggers CLAUDE.md regeneration, regenerates feedback rules file
 
 ### 6. Generated File Specifications
 - For each generated file:
@@ -73,11 +79,12 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
   - `CLAUDE.md` sections — all 5 templates (project_overview, architecture_rules, known_gotchas, patterns, preferences)
   - `.gitignore` addition and `.optima/.gitignore`
 
-- **Regeneration Logic:** 6-step process with malformed marker handling (orphaned START/END, duplicates, whitespace)
+- **Regeneration Logic:** 5-step process with malformed marker handling (orphaned START/END, duplicates, whitespace)
 - **Empty section omission:** Sections with zero entries omitted entirely
 - **Project purpose extraction priority:** package.json → pyproject.toml → README.md first paragraph
-- **Instruction budget:** 30-35 total, with caps per section
-- **Necessity test filters:** Exclude old gotchas, linter-enforced rules, obvious conventions, single-occurrence patterns
+- **Instruction budget:** 30-35 total, with caps per section (10 rules, 10 gotchas, 5 patterns, 5 preferences)
+- **Instruction budget enforcement algorithm:** Query → filter (necessity test) → sort → truncate → omit empty sections
+- **Necessity test filters:** Gotchas require `hit_count >= 2` (Q4). Exclude `hit_count = 0` older than 30 days. Exclude linter-enforced rules. Exclude single-occurrence patterns. Include all preferences.
 
 ### 7. Edge Cases, Validation & Error Handling
 - **Input validation:** Zod refinements for optima_memorize (type-dependent required fields)
@@ -89,10 +96,10 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
 - **Path normalization:** Forward slashes always, symlinks not followed
 
 ### 8. Testing Strategy
-- **Critical paths:** All tool success + error cases, lazy indexing mtime logic, error normalization dedup (Windows paths + UUIDs), CLAUDE.md marker merge, gotcha retrieval hierarchy, directory precedence, gitignore matching, entity extraction (all edge cases), schema migration, DB corruption recovery, path normalization, binary detection
+- **Critical paths:** All tool success + error cases, lazy indexing mtime logic, error sanitization (API keys, JWTs, DB URLs redacted), error normalization dedup (Windows paths + UUIDs), CLAUDE.md marker merge, gotcha retrieval hierarchy, directory precedence, gitignore matching, entity extraction (all edge cases), schema migration, DB corruption recovery, path normalization, binary detection, **path traversal rejection** (../../ escapes), **instruction budget enforcement** (cap overflow handling), **necessity test filtering** (hit_count thresholds)
 - **Test approach:** Unit tests for business logic, integration tests for tool handlers (mock FS, real SQLite)
 - **Coverage target:** 80%+ across src/
-- **Test fixtures:** sample package.json, tsconfig.json, TypeScript files with entities (async, arrow, overloads, getters, enums, etc.), error messages (Unix paths, Windows paths, timestamps, UUIDs), .gitignore files, existing CLAUDE.md with markers, malformed CLAUDE.md, linter configs
+- **Test fixtures:** sample package.json, tsconfig.json, TypeScript files with entities (async, arrow, overloads, getters, enums, etc.), error messages (Unix paths, Windows paths, timestamps, UUIDs, **embedded API keys, JWTs**), .gitignore files, existing CLAUDE.md with markers, malformed CLAUDE.md (orphaned START, orphaned END, duplicates), linter configs, **path traversal inputs** (`../../etc/passwd`, `..\\..\\secrets`)
 
 ### 9. Step-by-Step Implementation Plan
 Build in phases, dependency order:

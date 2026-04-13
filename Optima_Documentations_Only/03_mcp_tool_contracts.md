@@ -10,6 +10,26 @@ Since early 2026, Claude Code uses **Tool Search** (lazy loading) for MCP tools 
 
 **Tool naming convention:** All tools are prefixed with `optima_` to avoid collisions with other MCP servers. The descriptions below are tuned for Tool Search discoverability.
 
+## Tool Descriptions for Tool Search
+
+Claude Code uses Tool Search (semantic matching on tool names and descriptions) to decide which MCP tools to load. These are the exact `.describe()` strings to use when registering tools with the MCP SDK. Copy verbatim.
+
+| Tool | Registration Name | Description String (copy exactly) |
+| --- | --- | --- |
+| `optima_get_context` | `"optima_get_context"` | `"Get project context, code structure, known errors and fixes, architectural rules, and recent changes for a directory. Lazily re-indexes changed files. Call at the start of any coding task."` |
+| `optima_memorize` | `"optima_memorize"` | `"Store knowledge learned during this session: error fixes, architectural decisions, code patterns, or developer preferences. Call after fixing bugs, making design decisions, or establishing conventions."` |
+| `optima_reindex` | `"optima_reindex"` | `"Force a full project re-index. Use after git clone, branch switch, large merge, or when the index seems stale. Rarely needed — normal indexing is automatic."` |
+
+**Registration example (in `src/server.ts`):**
+```tsx
+server.tool(
+  "optima_get_context",
+  "Get project context, code structure, known errors and fixes, architectural rules, and recent changes for a directory. Lazily re-indexes changed files. Call at the start of any coding task.",
+  GetContextInputSchema.shape,
+  async (params) => { /* handler */ }
+);
+```
+
 ## Zod Schemas
 
 ```tsx
@@ -27,7 +47,7 @@ export const GetContextOutputSchema = z.object({
   project: z.object({
     name: z.string(),
     purpose: z.string().nullable(),
-    linter_detected: z.string().nullable(),
+    linter_detected: z.array(z.string()).nullable(), // Parsed from JSON string in DB. null if none detected.
     tech_stack: z.array(z.string()),
     build_command: z.string().nullable(),
     test_command: z.string().nullable(),
@@ -130,7 +150,7 @@ export const ReindexOutputSchema = z.object({
 
 **Internal steps (in order):**
 
-1. Resolve `path` relative to project root. If path does not exist, throw `OptimaError("PATH_NOT_FOUND")`.
+1. Resolve `path` relative to project root using `path.resolve(projectRoot, inputPath)`. **Security: validate the resolved absolute path starts with `projectRoot`** — if not (e.g., `../../.ssh/`), throw `OptimaError("PATH_NOT_FOUND", "Path escapes project root")`. Then normalize to forward slashes. If the validated path does not exist on disk, throw `OptimaError("PATH_NOT_FOUND")`.
 2. Check if project metadata exists in `project_meta` table. If not, run full project analysis first (detect tech stack from `package.json`, `tsconfig.json`, `pyproject.toml`, etc.).
 3. Query `file_index` for all files under the requested path.
 4. For each file, check `fs.stat(file).mtimeMs` against the stored `mtime_ms`.
@@ -187,6 +207,61 @@ For each entity, capture: name, line range, signature (for functions: parameter 
 - **Union/intersection types:** Extract as kind `"type"`. No special handling needed — Tree-sitter gives us the full declaration.
 - **Enum declarations:** Extract as kind `"type"`. Enums are conceptually type definitions.
 
+**Tree-sitter query patterns (TypeScript):**
+
+Use the `tree-sitter-typescript` parser with these S-expression queries to extract entities. These are the minimal viable queries — adapt field names to exact tree-sitter-typescript grammar node types.
+
+```scheme
+;; Top-level function declarations
+(function_declaration
+  name: (identifier) @name
+  parameters: (formal_parameters) @params
+  return_type: (type_annotation)? @return_type) @func
+
+;; Arrow functions assigned to const/let at top level
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (arrow_function
+      parameters: (formal_parameters) @params))) @arrow
+
+;; Class declarations
+(class_declaration
+  name: (type_identifier) @name) @class
+
+;; Interface declarations
+(interface_declaration
+  name: (type_identifier) @name) @interface
+
+;; Type alias declarations
+(type_alias_declaration
+  name: (type_identifier) @name
+  value: (_) @value) @type_alias
+
+;; Enum declarations → extract as kind "type"
+(enum_declaration
+  name: (identifier) @name) @enum
+
+;; Export statements (named exports)
+(export_statement
+  declaration: (_)? @decl
+  (export_clause)? @clause) @export
+
+;; Top-level variable declarations (const/let/var)
+(program
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name)) @variable)
+```
+
+**Implementation notes:**
+- Run queries against `tree.rootNode` (top-level only — skip nested function declarations inside other functions).
+- For `exported`: check if the parent node is an `export_statement`.
+- For `signature`: concatenate parameters text and return type annotation text.
+- For getters/setters: query `(method_definition kind: "get"|"set")` inside class bodies. Extract as kind `"function"` with name `get_propName` / `set_propName`.
+- For function overloads: query all `function_signature` nodes but only emit the `function_declaration` (implementation). Skip signatures.
+- For `declare` statements: filter out nodes where the parent is `ambient_declaration`. Skip entirely.
+
 Files that fail to parse (invalid syntax) should be indexed in `file_index` but produce zero entities. Log a warning, do not throw.
 
 **Gitignore and security exclusions:**
@@ -218,13 +293,13 @@ Note: Optima DOES index `.claude/settings.json`, `.claude/agents/`, `.claude/com
 
 1. Validate input with `MemorizeInputSchema`.
 2. Based on `type`:
-    - `error_fix`: Normalize the error string (strip absolute paths, line numbers, timestamps). Compute `error_hash` as SHA-256 of the normalized string. Check `gotchas` table for existing entry with same `error_hash`. If found: update `resolution`, `files`, `updatedAt`. If not found: insert new row.
+    - `error_fix`: **First, sanitize the raw error text** — scrub sensitive data (API keys, JWTs, database connection strings, bearer tokens, long hash strings) using the `sanitizeError()` function below. Store the sanitized version as `error_text` in the database. Then normalize the sanitized string (strip paths, line numbers, timestamps) and compute `error_hash` as SHA-256 of the normalized string. Check `gotchas` table for existing entry with same `error_hash`. If found: update `resolution`, `files`, `updatedAt`. If not found: insert new row.
     - `architectural_rule`: Insert into `rules` table with `type = "architectural_rule"`.
     - `pattern`: Insert into `rules` table with `type = "pattern"`.
     - `preference`: Insert into `rules` table with `type = "preference"`.
 3. Generate a random UUID v4 for `memory_id`. This is a correlation ID for the caller to reference this memorize operation — it is NOT the database row's `id`. The UUID is generated fresh per call and is not stored in the database. It serves as a receipt: "your memorize call succeeded, here's a reference."
 4. Count total rows across `gotchas` + `rules` tables for `total_memories`.
-5. If the new entry is an `architectural_rule` and `directory` is null (project-wide), trigger [CLAUDE.md](http://CLAUDE.md) regeneration.
+5. **Trigger CLAUDE.md regeneration** after EVERY successful memorize call, regardless of type. Rationale: all memory types (error_fix, architectural_rule, pattern, preference) contribute to CLAUDE.md sections. The generator uses content hashing (step 5 of regeneration logic in Doc 04) to skip the actual file write if nothing changed, so frequent regeneration is cheap. Do NOT selectively regenerate only for project-wide rules — this causes stale CLAUDE.md when gotchas or patterns accumulate.
 6. Return `MemorizeOutput`.
 
 **Error normalization for dedup:**
@@ -252,6 +327,26 @@ function normalizeError(error: string): string {
 }
 ```
 
+**Error sanitization function (runs BEFORE normalization, BEFORE storage):**
+
+```tsx
+function sanitizeError(error: string): string {
+  return error
+    // Strip Bearer tokens
+    .replace(/bearer\s+[\w\-.]+/gi, "bearer <REDACTED>")
+    // Strip API keys (common prefixes: sk-, pk-, api_, key_)
+    .replace(/(?:sk|pk|api|key)[-_][a-zA-Z0-9]{20,}/g, "<API_KEY_REDACTED>")
+    // Strip database connection strings
+    .replace(/(postgres|mysql|mongodb|redis):\/\/[^\s"']+/gi, "<DB_URL_REDACTED>")
+    // Strip JWTs (three base64 segments separated by dots)
+    .replace(/eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g, "<JWT_REDACTED>")
+    // Strip long hex/base64 strings (likely tokens, >=40 chars)
+    .replace(/[a-zA-Z0-9_-]{40,}/g, "<SECRET_REDACTED>");
+}
+```
+
+**Important:** Sanitization runs on the raw error text before storage in the `gotchas.error_text` column. This prevents accidental exposure of secrets in `CLAUDE.md` generated output. The sanitized text is what gets stored; the original unsanitized error is never persisted.
+
 **Important:** The normalization intentionally preserves the error *type* and *message structure*. Two errors like "cannot find module 'foo'" and "cannot find module 'bar'" will normalize to the same hash — this is correct behavior. They represent the same *class* of error. The raw `error_text` (stored verbatim) preserves the specifics. **Security warning:** The raw `error_text` must also have sensitive secrets (like API keys, JWTs, and long hash strings) redacted before storage in the database to prevent accidental token leaks in `CLAUDE.md`. Apply a scrubbing pass against the raw error before creating the `gotchas` record.
 
 ---
@@ -260,12 +355,15 @@ function normalizeError(error: string): string {
 
 **Internal steps:**
 
-1. Resolve `path` (default: project root).
+1. Resolve `path` (default: project root). **Validate path stays within project root** (same security check as `optima_get_context` step 1).
 2. Delete all entries in `file_index` (and cascaded `entities`) for files under the path.
 3. Run full file walk + Tree-sitter extraction for all files under the path.
 4. Update `project_meta.lastFullIndex` to current timestamp.
-5. Log the reindex event with `reason` if provided.
-6. Return `ReindexOutput`.
+5. Re-run project analysis (tech stack, commands, purpose) to pick up changes from branch switch or major restructure.
+6. **Trigger CLAUDE.md regeneration** (project context changed substantially after reindex — `project_overview` section may need updating, entity counts changed, etc.). The generator's content hash check prevents unnecessary file writes.
+7. **Regenerate `.claude/rules/optima-feedback.md`** (in case it was deleted or the project structure changed).
+8. Log the reindex event with `reason` if provided.
+9. Return `ReindexOutput`.
 
 ---
 
