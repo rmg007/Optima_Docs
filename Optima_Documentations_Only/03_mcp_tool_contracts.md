@@ -254,12 +254,14 @@ export const GetContextOutputSchema = z.object({
       line: z.number(),
       signature: z.string().nullable(),
       exported: z.boolean(),
+      description: z.string().nullable(),
     })),
   }),
   gotchas: z.array(z.object({
     id: z.number(),
     error_text: z.string(),
     resolution: z.string(),
+    root_cause: z.string().nullable(),
     files: z.array(z.string()),
     directory: z.string().nullable(),
     hit_count: z.number(),
@@ -272,6 +274,11 @@ export const GetContextOutputSchema = z.object({
     directory: z.string().nullable(),
   })),
   recent_changes: z.array(z.string()),
+  // Verification fields (for Iron Law 3: Evidence Before Claims)
+  files_reindexed: z.number(),        // how many files had changed mtimes and were re-indexed
+  files_removed: z.number(),          // how many deleted files were cleaned from the index
+  reindex_duration_ms: z.number(),    // how long re-indexing took
+  is_cold_start: z.boolean(),         // true if this was the first-ever call (full project init)
 });
 
 // ── optima_memorize ───────────────────────────────────────────
@@ -316,6 +323,14 @@ export const MemorizeOutputSchema = z.object({
   stored: z.boolean(),
   memory_id: z.string().uuid(),
   total_memories: z.number(),
+  // Verification fields (for Iron Law 3: Evidence Before Claims)
+  type: z.enum(["error_fix", "architectural_rule", "pattern", "preference"]),  // echo back the type for confirmation
+  claude_md_regenerated: z.boolean(),  // true if CLAUDE.md was rewritten, false if content hash matched
+  claude_md_instruction_count: z.number(),  // current total instructions in CLAUDE.md (budget tracking)
+  feedback_rules_written: z.boolean(),  // true if optima-feedback.md was created/updated
+  duplicate_detected: z.boolean(),  // true if a gotcha with the same normalized hash already existed
+  duplicate_of: z.number().nullable(),  // if stored=false, the ID of the existing record that matched. null otherwise
+  hit_count_updated: z.boolean(),  // true if an existing gotcha's hit_count was incremented (dedup case)
 });
 
 // ── optima_reindex ────────────────────────────────────────────
@@ -331,6 +346,12 @@ export const ReindexOutputSchema = z.object({
   files_indexed: z.number(),
   entities_found: z.number(),
   duration_ms: z.number(),
+  // Verification fields (for Iron Law 3: Evidence Before Claims)
+  total_files_scanned: z.number(),
+  total_entities_found: z.number(),
+  project_analysis_updated: z.boolean(),
+  claude_md_regenerated: z.boolean(),
+  feedback_rules_written: z.boolean(),
 });
 ```
 

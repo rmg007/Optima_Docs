@@ -89,6 +89,22 @@ export const entities = sqliteTable("entities", {
 // context can include "function fetchUser exists at line 42 — last modified
 // to fix null reference in auth flow."
 
+// ── Field Surfacing Policy ───────────────────────────────────
+// Several database columns are stored for future use but intentionally
+// excluded from MVP tool output. The table below documents which fields
+// are surfaced in TypeScript interfaces / Zod output schemas and which
+// are stored only for Phase 2.
+//
+// | Field         | Table    | In DB | In TypeScript Interface | In Zod Output | Reason |
+// |---------------|----------|-------|------------------------|---------------|--------|
+// | description   | entities | Yes   | Yes (EntitySummary)    | Yes           | JSDoc content provides immediate value for entity context. |
+// | tags          | gotchas  | Yes   | No                     | No            | Freeform tags for Phase 2 search. Not needed in MVP tool output. |
+// | files         | rules    | Yes   | No                     | No            | Stored for provenance. Rules are scoped by `directory`, not individual files. |
+// | tags          | rules    | Yes   | No                     | No            | Same as gotchas tags. Phase 2 search feature. |
+//
+// If you add a column to a table, decide whether it belongs in tool output.
+// If not, add it to this table so the omission is documented, not accidental.
+
 // ── Gotcha Ledger ─────────────────────────────────────────────
 
 export const gotchas = sqliteTable("gotchas", {
@@ -382,6 +398,14 @@ export interface MemorizeOutput {
   stored: boolean;
   memory_id: string;
   total_memories: number;
+  // Verification fields (Iron Law 3: Evidence Before Claims)
+  type: "error_fix" | "architectural_rule" | "pattern" | "preference";
+  duplicate_of: number | null;
+  hit_count_updated: boolean;
+  claude_md_regenerated: boolean;
+  claude_md_instruction_count: number;
+  feedback_rules_written: boolean;
+  duplicate_detected: boolean;
 }
 
 export interface ReindexInput {
@@ -393,6 +417,12 @@ export interface ReindexOutput {
   files_indexed: number;
   entities_found: number;
   duration_ms: number;
+  // Verification fields (Iron Law 3: Evidence Before Claims)
+  total_files_scanned: number;
+  total_entities_found: number;
+  project_analysis_updated: boolean;
+  claude_md_regenerated: boolean;
+  feedback_rules_written: boolean;
 }
 
 // ── Internal Types ────────────────────────────────────────────
@@ -421,6 +451,7 @@ export interface EntitySummary {
   line: number;
   signature: string | null;
   exported: boolean;
+  description: string | null;
 }
 
 export interface GotchaEntry {
@@ -625,6 +656,106 @@ export const migration = {
 4. If any migration fails: rollback transaction, throw `OptimaError("SCHEMA_MIGRATION_FAILED")`.
 
 **Drizzle Kit is a dev-only tool.** Use `drizzle-kit` during development to generate migration SQL from schema changes (`bunx drizzle-kit generate`), then paste the SQL into a numbered migration file. Drizzle ORM is used at runtime for typed queries — Drizzle Kit is not.
+
+### `001_initial.ts` — Full CREATE TABLE SQL
+
+This is the exact SQL that `src/db/migrations/001_initial.ts` must execute. Every column matches the Drizzle schema above 1:1. Copy verbatim.
+
+```typescript
+export const migration = {
+  version: 1,
+  description: "Initial schema — 7 tables",
+  up(db: Database): void {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS project_meta (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        name TEXT NOT NULL,
+        root_path TEXT NOT NULL,
+        tech_stack TEXT NOT NULL DEFAULT '[]',
+        build_command TEXT,
+        test_command TEXT,
+        lint_command TEXT,
+        project_purpose TEXT,
+        linter_detected TEXT,
+        last_full_index TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS file_index (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL UNIQUE,
+        mtime_ms INTEGER NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        language TEXT,
+        hash TEXT NOT NULL,
+        indexed_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_file_path ON file_index(path);
+
+      CREATE TABLE IF NOT EXISTS entities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES file_index(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        line_start INTEGER NOT NULL,
+        line_end INTEGER NOT NULL,
+        signature TEXT,
+        exported INTEGER NOT NULL DEFAULT 0,
+        description TEXT,
+        created_by_session TEXT,
+        last_modified_context TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_entities_file ON entities(file_id);
+      CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+
+      CREATE TABLE IF NOT EXISTS gotchas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        error_text TEXT NOT NULL,
+        error_hash TEXT NOT NULL,
+        resolution TEXT NOT NULL,
+        root_cause TEXT,
+        files TEXT NOT NULL DEFAULT '[]',
+        directory TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        hit_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_gotchas_hash ON gotchas(error_hash);
+      CREATE INDEX IF NOT EXISTS idx_gotchas_directory ON gotchas(directory);
+
+      CREATE TABLE IF NOT EXISTS rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        rationale TEXT,
+        directory TEXT,
+        files TEXT NOT NULL DEFAULT '[]',
+        tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_rules_type ON rules(type);
+      CREATE INDEX IF NOT EXISTS idx_rules_directory ON rules(directory);
+
+      CREATE TABLE IF NOT EXISTS generation_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_path TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        trigger TEXT NOT NULL,
+        generated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+  },
+};
+```
+
+**Verification:** Compare every column in the Drizzle schema (above) against this CREATE TABLE SQL. They must be 1:1. Zero columns in Drizzle that aren't in the migration, and vice versa.
 
 ## Phase 2 Schema Migration
 

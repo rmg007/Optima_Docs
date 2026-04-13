@@ -174,6 +174,7 @@ Add this after every build step's "Definition of Done":
 - [ ] Binary detection works (checks first 512 bytes for null bytes)
 - [ ] All 12 entity extraction edge cases handled
 - [ ] Tree-sitter parses TypeScript files correctly
+- [ ] Tests assert against frozen dataset: `test_fixtures/entity_extraction_dataset.json`
 - [ ] 15+ unit tests
 
 ---
@@ -233,6 +234,7 @@ Add this after every build step's "Definition of Done":
 - [ ] API keys/JWTs/bearer tokens/DB URLs scrubbed
 - [ ] Windows paths and UUIDs stripped during normalization
 - [ ] Hash collision produces both entries + `HASH_COLLISION` warning
+- [ ] Tests assert against frozen dataset: `test_fixtures/error_normalization_dataset.json`
 - [ ] 10+ unit tests with real-world error string examples
 
 ---
@@ -265,6 +267,7 @@ Add this after every build step's "Definition of Done":
 - [ ] Dedup by ID/sort by `hit_count` desc/cap at 10
 - [ ] `hit_count` and `updated_at` updated on retrieval
 - [ ] Rules store respects directory scoping precedence
+- [ ] Tests assert against frozen datasets: `test_fixtures/gotcha_retrieval_dataset.json` and `test_fixtures/directory_scoping_dataset.json`
 - [ ] 12+ unit tests
 
 ---

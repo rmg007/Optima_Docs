@@ -133,6 +133,8 @@ optima/
 ├── src/
 │   ├── index.ts                    # Entry point — creates and starts MCP server
 │   ├── server.ts                   # Tool registration and dispatch
+│   ├── schemas.ts                  # Zod input/output schemas for all tools
+│   ├── types.ts                    # TypeScript interfaces (copied from Doc 02)
 │   ├── tools/
 │   │   ├── get-context.ts          # optima_get_context implementation
 │   │   ├── memorize.ts             # optima_memorize implementation
@@ -142,6 +144,7 @@ optima/
 │   │   ├── file-indexer.ts         # File walking, mtime checking, hash computation
 │   │   └── entity-extractor.ts     # Tree-sitter AST parsing → entities
 │   ├── memory/
+│   │   ├── error-normalizer.ts     # Error sanitization and normalization (dedup strategy)
 │   │   ├── gotcha-ledger.ts        # Error → solution CRUD
 │   │   └── rules-store.ts          # Architectural rules CRUD
 │   ├── generator/
