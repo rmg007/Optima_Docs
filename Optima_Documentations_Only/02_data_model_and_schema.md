@@ -145,6 +145,29 @@ export const rules = sqliteTable("rules", {
   dirIdx: index("idx_rules_directory").on(table.directory),
 }));
 
+// ── Task Outcomes ─────────────────────────────────────────────
+
+export const taskOutcomes = sqliteTable("task_outcomes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  task: text("task").notNull(),                                     // "Add JWT auth to /api/users"
+  outcome: text("outcome").notNull(),                               // "success" | "partial" | "abandoned"
+  learnings: text("learnings"),                                     // "Had to use RS256 not HS256 because..."
+  files: text("files").notNull().default("[]"),                     // JSON array of file paths involved
+  directory: text("directory"),                                     // Primary directory scope
+  durationHint: text("duration_hint"),                              // "~45min" — helps future estimation
+  tags: text("tags").notNull().default("[]"),                       // JSON array of freeform tags
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => ({
+  outcomeIdx: index("idx_task_outcomes_outcome").on(table.outcome),
+  dirIdx: index("idx_task_outcomes_directory").on(table.directory),
+}));
+
+// Task outcomes capture proactive knowledge — "this approach worked/didn't work
+// for this kind of task." This is fundamentally different from error fixes (reactive:
+// "this broke, here's the fix") and rules (prescriptive: "always do X"). When
+// Claude Code starts a similar task, Optima can surface insights like "a similar
+// task took ~45min and required RS256 instead of HS256."
+
 // ── Generation Log ────────────────────────────────────────────
 
 export const generationLog = sqliteTable("generation_log", {
@@ -389,6 +412,7 @@ export interface GetContextOutput {
   directory_context: DirectoryContext;
   gotchas: GotchaEntry[];
   architectural_rules: RuleEntry[];
+  task_insights: TaskOutcomeEntry[];
   recent_changes: string[];
   dependency_context: {
     key_dependencies: DependencyInfo[];
@@ -399,14 +423,26 @@ export type MemorizeInput =
   | { type: "error_fix"; error: string; resolution: string; rootCause?: string; dependencyVersion?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "architectural_rule"; rule: string; rationale?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "pattern"; pattern: string; example?: string; files?: string[]; directory?: string; tags?: string[] }
-  | { type: "preference"; preference: string; files?: string[]; directory?: string; tags?: string[] };
+  | { type: "preference"; preference: string; files?: string[]; directory?: string; tags?: string[] }
+  | { type: "task_outcome"; task: string; outcome: "success" | "partial" | "abandoned"; learnings?: string; files?: string[]; directory?: string; duration_hint?: string; tags?: string[] };
+
+export interface TaskOutcomeEntry {
+  id: number;
+  task: string;
+  outcome: "success" | "partial" | "abandoned";
+  learnings: string | null;
+  files: string[];
+  directory: string | null;
+  duration_hint: string | null;
+  created_at: string;
+}
 
 export interface MemorizeOutput {
   stored: boolean;
   memory_id: string;
   total_memories: number;
   // Verification fields (Iron Law 3: Evidence Before Claims)
-  type: "error_fix" | "architectural_rule" | "pattern" | "preference";
+  type: "error_fix" | "architectural_rule" | "pattern" | "preference" | "task_outcome";
   duplicate_of: number | null;
   hit_count_updated: boolean;
   claude_md_regenerated: boolean;
@@ -643,6 +679,7 @@ export function generateFeedbackRules(projectRoot: string): boolean;
 - **Entities:** Cascade-deleted with their parent file_index row.
 - **Gotchas:** Keep all in database (never deleted — needed for future error matching). `hit_count` tracks usefulness; `updated_at` refreshes each time `hit_count` increments. For CLAUDE.md generation, include only gotchas with `hit_count >= 2` (resolved Q4 — single authoritative threshold, see Doc 04 necessity test).
 - **Rules:** Keep all. Manual pruning via future tooling.
+- **Task outcomes:** Keep last 50 entries. Prune oldest entries beyond 50 during `getDatabase()` initialization. Task outcomes are proactive knowledge with diminishing relevance — old outcomes about abandoned approaches from 6 months ago are less useful than recent ones.
 - **Generation log:** Keep last 50 entries per file path. Prune during `getDatabase()` initialization (runs once on cold start, not on every tool call). SQL: `DELETE FROM generation_log WHERE id NOT IN (SELECT id FROM generation_log WHERE file_path = ? ORDER BY generated_at DESC LIMIT 50)` for each distinct `file_path`.
 
 ## Schema Migration Strategy
@@ -763,6 +800,20 @@ export const migration = {
       );
       CREATE INDEX IF NOT EXISTS idx_rules_type ON rules(type);
       CREATE INDEX IF NOT EXISTS idx_rules_directory ON rules(directory);
+
+      CREATE TABLE IF NOT EXISTS task_outcomes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        learnings TEXT,
+        files TEXT NOT NULL DEFAULT '[]',
+        directory TEXT,
+        duration_hint TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_outcomes_outcome ON task_outcomes(outcome);
+      CREATE INDEX IF NOT EXISTS idx_task_outcomes_directory ON task_outcomes(directory);
 
       CREATE TABLE IF NOT EXISTS generation_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

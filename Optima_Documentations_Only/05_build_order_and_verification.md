@@ -268,6 +268,8 @@ Add this after every build step's "Definition of Done":
 - [ ] Dedup by ID/sort by `hit_count` desc/cap at 10
 - [ ] `hit_count` and `updated_at` updated on retrieval
 - [ ] Rules store respects directory scoping precedence
+- [ ] Task outcome storage works (insert, query by directory)
+- [ ] Task outcomes filtered: only outcomes with non-null learnings included in CLAUDE.md generation
 - [ ] Tests assert against frozen datasets: `test_fixtures/gotcha_retrieval_dataset.json` and `test_fixtures/directory_scoping_dataset.json`
 - [ ] 12+ unit tests
 

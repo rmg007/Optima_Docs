@@ -17,7 +17,7 @@ These descriptions are critical for Claude Code's Tool Search system. They deter
 | Tool | Description |
 |---|---|
 | `optima_get_context` | `Use before modifying any files in a directory, when encountering an error you haven't seen before, when starting work in a new area of the codebase, or when you need to understand what entities and patterns exist in a directory. Always call this before writing code.` |
-| `optima_memorize` | `Use after fixing any error, after discovering a rule the codebase follows, after noticing a recurring pattern, or when the developer states a preference about how code should be written. Call immediately — do not batch or defer.` |
+| `optima_memorize` | `Use after fixing any error, after discovering a rule the codebase follows, after noticing a recurring pattern, when the developer states a preference, or after completing a non-trivial task (to record the outcome and key learnings). Call immediately — do not batch or defer.` |
 | `optima_reindex` | `Use after major refactoring, after adding or removing significant dependencies, after restructuring directories, or when optima_get_context returns stale results that don't match the current file state.` |
 
 **CSO Principles (from Superpowers writing-skills):**
@@ -99,7 +99,7 @@ export function registerTools(server: Server): void {
 
   server.tool(
     "optima_memorize",
-    "Store knowledge learned during this session: error fixes, architectural decisions, code patterns, or developer preferences. Call after fixing bugs, making design decisions, or establishing conventions.",
+    "Store knowledge learned during this session: error fixes, architectural decisions, code patterns, developer preferences, or task outcomes. Call after fixing bugs, making design decisions, establishing conventions, or completing any non-trivial task.",
     MemorizeInputSchema.shape,
     async (params) => {
       try {
@@ -275,6 +275,16 @@ export const GetContextOutputSchema = z.object({
     rationale: z.string().nullable(),
     directory: z.string().nullable(),
   })),
+  task_insights: z.array(z.object({
+    id: z.number(),
+    task: z.string(),
+    outcome: z.enum(["success", "partial", "abandoned"]),
+    learnings: z.string().nullable(),
+    files: z.array(z.string()),
+    directory: z.string().nullable(),
+    duration_hint: z.string().nullable(),
+    created_at: z.string(),
+  })).describe("Past task outcomes relevant to the current directory — what worked, what didn't, how long it took"),
   recent_changes: z.array(z.string()),
   dependency_context: z.object({
     key_dependencies: z.array(z.object({
@@ -293,7 +303,7 @@ export const GetContextOutputSchema = z.object({
 // ── optima_memorize ───────────────────────────────────────────
 
 export const MemorizeInputSchema = z.object({
-  type: z.enum(["error_fix", "architectural_rule", "pattern", "preference"])
+  type: z.enum(["error_fix", "architectural_rule", "pattern", "preference", "task_outcome"])
     .describe("The kind of knowledge being stored"),
   error: z.string().optional()
     .describe("The original error message or test failure (for error_fix)"),
@@ -313,6 +323,14 @@ export const MemorizeInputSchema = z.object({
     .describe("Code example demonstrating the pattern (for pattern)"),
   preference: z.string().optional()
     .describe("Developer preference description (for preference)"),
+  task: z.string().optional()
+    .describe("Task description — what was attempted (for task_outcome)"),
+  outcome: z.enum(["success", "partial", "abandoned"]).optional()
+    .describe("How the task ended (for task_outcome)"),
+  learnings: z.string().max(1000).optional()
+    .describe("Key insight from the task — what worked, what didn't, what was surprising (for task_outcome)"),
+  duration_hint: z.string().max(50).optional()
+    .describe("Rough time estimate, e.g. '~45min' — helps future task estimation (for task_outcome)"),
   files: z.array(z.string()).optional()
     .describe("Files involved"),
   directory: z.string().optional()
@@ -325,6 +343,7 @@ export const MemorizeInputSchema = z.object({
     if (data.type === "architectural_rule") return !!data.rule;
     if (data.type === "pattern") return !!data.pattern;
     if (data.type === "preference") return !!data.preference;
+    if (data.type === "task_outcome") return !!data.task && !!data.outcome;
     return false;
   },
   { message: "Required fields missing for the specified type" },
@@ -335,7 +354,7 @@ export const MemorizeOutputSchema = z.object({
   memory_id: z.string().uuid(),
   total_memories: z.number(),
   // Verification fields (for Iron Law 3: Evidence Before Claims)
-  type: z.enum(["error_fix", "architectural_rule", "pattern", "preference"]),  // echo back the type for confirmation
+  type: z.enum(["error_fix", "architectural_rule", "pattern", "preference", "task_outcome"]),  // echo back the type for confirmation
   claude_md_regenerated: z.boolean(),  // true if CLAUDE.md was rewritten, false if content hash matched
   claude_md_instruction_count: z.number(),  // current total instructions in CLAUDE.md (budget tracking)
   feedback_rules_written: z.boolean(),  // true if optima-feedback.md was created/updated
@@ -383,6 +402,7 @@ export const ReindexOutputSchema = z.object({
 7. Files in `file_index` that no longer exist on disk: delete from `file_index` (cascade deletes entities).
 8. Query `gotchas` table filtered by `directory` matching the requested path (see **Gotcha Retrieval Strategy** below). Increment `hit_count` for returned gotchas. Update `updated_at` to current timestamp. For each returned gotcha with non-null `dependency_version`: parse the dependency name from the stored string (format: `name@version`), look up the current version in `project_meta.key_dependencies`. If the versions differ or the dependency is no longer present, set `possibly_outdated: true` on the output. If `dependency_version` is null, set `possibly_outdated: false`.
 9. Query `rules` table filtered by `directory` matching the requested path (see **Directory Scoping Precedence** below).
+9a. Query `task_outcomes` table filtered by `directory` matching the requested path (same hierarchical prefix match as gotchas/rules). Return outcomes with non-null `learnings`, sorted by `created_at` DESC, capped at 5 entries.
 10. Collect `recent_changes` — file paths re-indexed in steps 5-7, sorted by mtime descending, capped at 20 entries. Empty on cold start.
 11. Assemble and return `GetContextOutput`. For `directory_context.description`, use **pure string concatenation** (no LLM inference):
     - If a `README.md` exists in the requested directory: use its first non-empty, non-heading line (truncated to 200 chars).
