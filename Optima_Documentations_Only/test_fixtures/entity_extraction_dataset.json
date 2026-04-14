@@ -152,9 +152,9 @@
       "expectedEntities": [
         {
           "name": "Logger",
-          "kind": "type",
+          "kind": "interface",
           "exported": true,
-          "signature": "interface Logger"
+          "signature": null
         },
         {
           "name": "createLogger",
@@ -208,6 +208,34 @@
           "name": "bar",
           "kind": "export",
           "exported": true
+        }
+      ]
+    },
+    {
+      "id": "EE-016",
+      "description": "JSDoc description extraction — first paragraph captured, @param/@returns tags excluded",
+      "input": "/**\n * Fetches a user by ID from the database.\n * Returns null if no user is found.\n * @param id - The user's UUID\n * @returns The user or null\n */\nexport async function fetchUser(id: string): Promise<User | null> {\n  return db.users.findOne(id);\n}",
+      "expectedEntities": [
+        {
+          "name": "fetchUser",
+          "kind": "function",
+          "exported": true,
+          "signature": "async fetchUser(id: string): Promise<User | null>",
+          "description": "Fetches a user by ID from the database. Returns null if no user is found."
+        }
+      ]
+    },
+    {
+      "id": "EE-017",
+      "description": "No JSDoc — description is null",
+      "input": "// Regular comment, not JSDoc\nexport function processQueue(): void {\n  runAll();\n}",
+      "expectedEntities": [
+        {
+          "name": "processQueue",
+          "kind": "function",
+          "exported": true,
+          "signature": "function processQueue(): void",
+          "description": null
         }
       ]
     }

@@ -467,7 +467,7 @@ Parse TypeScript files using `tree-sitter-typescript`. Extract:
 - Named exports → kind: `"export"`
 - Top-level const/let declarations → kind: `"variable"`
 
-For each entity, capture: name, line range, signature (for functions: parameter list and return type), whether it’s exported, and JSDoc description if present.
+For each entity, capture: name, line range, signature (for functions: parameter list and return type), whether it’s exported, and JSDoc description if present. **JSDoc extraction:** implemented via `extractJsDocDescription()` in the verbatim code below — checks if the preceding named sibling is a `/** ... */` comment, strips decorators, and returns the first paragraph before any `@param`/`@returns` tags. Returns `null` if no JSDoc present. Getter/setter members inside a class do not inherit the class JSDoc; their `description` is always `null`.
 
 **Entity extraction edge cases:**
 
@@ -498,6 +498,26 @@ parser.setLanguage(TypeScript.typescript);
 // Node types that indicate ambient/declaration context — skip these
 const AMBIENT_PARENTS = new Set(["ambient_declaration", "declare_statement"]);
 
+/**
+ * Extracts the first paragraph of a JSDoc comment immediately preceding a node.
+ * Returns null if the preceding sibling is not a `/** ... *\/` comment.
+ */
+function extractJsDocDescription(node: Parser.SyntaxNode, source: string): string | null {
+  const prev = node.previousNamedSibling;
+  if (!prev || prev.type !== "comment") return null;
+  const comment = source.slice(prev.startIndex, prev.endIndex);
+  if (!comment.startsWith("/**")) return null;
+  const body = comment
+    .slice(3, -2)                                // strip /** and */
+    .split("\n")
+    .map(line => line.replace(/^\s*\*\s?/, ""))  // strip leading * from each line
+    .join(" ")
+    .trim();
+  // Return first paragraph only — stop before any @param/@returns/@tags
+  const firstParagraph = body.split(/\s@/)[0].trim();
+  return firstParagraph || null;
+}
+
 export function extractEntities(source: string, filePath: string): EntitySummary[] {
   const tree = parser.parse(source);
   const root = tree.rootNode;
@@ -509,6 +529,10 @@ export function extractEntities(source: string, filePath: string): EntitySummary
 
     // Skip ambient declarations (declare module, declare global, etc.)
     if (AMBIENT_PARENTS.has(node.type)) continue;
+
+    // Capture description from leading JSDoc before any unwrapping.
+    // The JSDoc comment is a sibling of the export_statement (or declaration itself).
+    const description = extractJsDocDescription(node, source);
 
     // Unwrap export_statement to get the inner declaration
     if (node.type === "export_statement") {
@@ -562,7 +586,7 @@ export function extractEntities(source: string, filePath: string): EntitySummary
           name, kind: "function", file: filePath,
           line: node.startPosition.row + 1,
           signature: `${isAsync ? "async " : ""}${name}${params}${retType}`,
-          exported,
+          exported, description: description ?? null,
         });
         break;
       }
@@ -573,7 +597,7 @@ export function extractEntities(source: string, filePath: string): EntitySummary
         entities.push({
           name, kind: "class", file: filePath,
           line: node.startPosition.row + 1,
-          signature: null, exported,
+          signature: null, exported, description: description ?? null,
         });
         // Extract getters/setters from class body
         const body = node.childForFieldName("body");
@@ -587,12 +611,14 @@ export function extractEntities(source: string, filePath: string): EntitySummary
               if (kind) {
                 const propName = member.childForFieldName("name")?.text;
                 if (propName) {
+                  const params = member.childForFieldName("parameters")?.text ?? "";
+                  const retType = member.childForFieldName("return_type")?.text ?? "";
                   entities.push({
                     name: `${kind.type}_${propName}`,
                     kind: "function", file: filePath,
                     line: member.startPosition.row + 1,
-                    signature: `${kind.type} ${propName}`,
-                    exported,
+                    signature: `${kind.type} ${propName}${params}${retType}`,
+                    exported, description: null,  // getters/setters don't get JSDoc from outer scope
                   });
                 }
               }
@@ -612,7 +638,7 @@ export function extractEntities(source: string, filePath: string): EntitySummary
           name, kind: "interface", file: filePath,
           line: node.startPosition.row + 1,
           signature: typeParams ? `${name}${typeParams}` : null,
-          exported,
+          exported, description: description ?? null,
         });
         break;
       }
@@ -627,7 +653,7 @@ export function extractEntities(source: string, filePath: string): EntitySummary
           name, kind: "type", file: filePath,
           line: node.startPosition.row + 1,
           signature: typeParams ? `${name}${typeParams}` : null,
-          exported,
+          exported, description: description ?? null,
         });
         break;
       }
@@ -638,7 +664,7 @@ export function extractEntities(source: string, filePath: string): EntitySummary
         entities.push({
           name, kind: "type", file: filePath,
           line: node.startPosition.row + 1,
-          signature: null, exported,
+          signature: null, exported, description: description ?? null,
         });
         break;
       }
@@ -660,7 +686,7 @@ export function extractEntities(source: string, filePath: string): EntitySummary
           entities.push({
             name, kind: "variable", file: filePath,
             line: declarator.startPosition.row + 1,
-            signature, exported,
+            signature, exported, description: description ?? null,
           });
         }
         break;
