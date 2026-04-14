@@ -26,8 +26,11 @@ If Bun's MCP spawner has issues (resolved Q6), fall back to:
 {
   "mcpServers": {
     "optima": {
-      "command": "npx",
-      "args": ["-y", "optima-mcp"]
+      "command": "node",
+      "args": ["path/to/optima/dist/index.js"],
+      "env": {
+        "OPTIMA_LOG_LEVEL": "DEBUG"
+      }
     }
   }
 }
@@ -64,7 +67,7 @@ The inception pattern has an apparent circular dependency: Claude Code needs the
    - b. Create and open `.optima/optima.db`. Run schema migrations (idempotent — checks `schema_version` table).
    - c. Run full project analysis (tech stack, commands, purpose detection).
    - d. Run full file walk + Tree-sitter entity extraction.
-   - e. Generate `.claude/rules/optima-feedback.md` (the inception payload).
+   - e. Generate `.claude/rules/optima-feedback.md` (the inception payload). This file instructs Claude Code to use all 5 tools: `optima_get_context`, `optima_memorize`, `optima_reindex`, `optima_dismiss_warning`, and `optima_forget`.
    - f. Generate `CLAUDE.md` with initial Optima sections.
    - g. Append `.optima/` to `.gitignore`.
    - h. Return `GetContextOutput` with full project context.
@@ -92,13 +95,15 @@ The only exception is `optima_reindex` — a manual escape hatch for full projec
 
 ## MVP Tool Surface
 
-Three tools. No more.
+Five tools. No more.
 
 | Tool | Purpose | When Called |
 | --- | --- | --- |
 | `optima_get_context` | Returns project context with lazy re-indexing | Start of any task |
 | `optima_memorize` | Stores error fixes, rules, patterns, preferences | After completing a task |
 | `optima_reindex` | Forces full project re-index | Rarely — after clone/branch switch |
+| `optima_dismiss_warning` | Marks a security finding as a false positive | When a security warning is a test fixture or rotated secret |
+| `optima_forget` | Deletes a stale or incorrect memory | When a gotcha, rule, or task outcome is outdated |
 
 ## Generated Files
 
@@ -114,7 +119,18 @@ Optima generates and maintains these files in the host project:
 
 **Optima reads but does NOT modify:** `.claude/settings.json`, `package.json`, `tsconfig.json`, `pyproject.toml` (used for project analysis and tech stack detection).
 
-**Optima NEVER reads or indexes:** `~/.claude/session-env/` (plaintext secrets), `~/.claude/projects/` (session transcripts), `~/.claude/file-history/` (edit snapshots), `CLAUDE.local.md` (developer's personal overrides), `.claude/settings.local.json` (personal permissions), `.env` files, or any Claude Code internal operational state. See `00_start_here.md` for the full exclusion list.
+**Optima NEVER reads or indexes:**
+- `~/.claude/session-env/` (plaintext secrets injected by Claude Code)
+- `~/.claude/projects/` (session transcripts)
+- `~/.claude/file-history/` (edit snapshots)
+- `CLAUDE.local.md` (developer's personal overrides — committed files are indexed, local overrides are not)
+- `.claude/settings.local.json` (personal permissions)
+- `.env`, `.env.local`, `.env.development`, `.env.production`, `.env.staging`, `.env.development.local`, `.env.production.local` (all `.env.*` variants)
+- `node_modules/`, `.git/`, `.optima/`, `dist/`, `build/`, `out/` directories
+- `**/secrets/` at any depth
+- All binary file formats (images, fonts, media, archives, compiled binaries, databases — full list in `02_data_model_and_schema.md`)
+
+**Safe to index (common misconception):** `.env.example` and `.env.template` are NOT excluded — they are safe to index as they contain placeholder values, not real secrets.
 
 **Version control for Optima-generated files:** All files Optima generates are designed to be committed to git (shared with the team):
 
@@ -138,7 +154,9 @@ optima/
 │   ├── tools/
 │   │   ├── get-context.ts          # optima_get_context implementation
 │   │   ├── memorize.ts             # optima_memorize implementation
-│   │   └── reindex.ts              # optima_reindex implementation
+│   │   ├── reindex.ts              # optima_reindex implementation
+│   │   ├── dismiss-warning.ts      # optima_dismiss_warning implementation
+│   │   └── forget.ts               # optima_forget implementation
 │   ├── indexer/
 │   │   ├── project-analyzer.ts     # Tech stack detection, command discovery
 │   │   ├── file-indexer.ts         # File walking, mtime checking, hash computation
@@ -156,12 +174,14 @@ optima/
 │   │   ├── migrations/
 │   │   │   ├── 001_initial.ts      # CREATE TABLE for all 9 tables
 │   │   │   ├── 002_fts5.ts         # FTS5 virtual tables + sync triggers
+│   │   │   ├── 003_security_findings_unique.ts  # UNIQUE index for deduplication
 │   │   │   └── index.ts            # Exports ordered migration list
 │   │   └── connection.ts           # Database lifecycle
 │   └── utils/
 │       ├── hasher.ts               # SHA-256 content hashing
 │       ├── paths.ts                # Path normalization, .gitignore matching
-│       └── errors.ts               # Error taxonomy
+│       ├── errors.ts               # Error taxonomy
+│       └── logger.ts               # Structured JSON logger (stderr, OPTIMA_LOG_LEVEL)
 ├── test/
 │   ├── tools/
 │   ├── indexer/
@@ -184,6 +204,10 @@ optima/
 - `optima_get_context` with lazy re-indexing via mtime checks
 - `optima_memorize` with unified input (error_fix, architectural_rule, pattern, preference)
 - `optima_reindex` for full project re-index
+- `optima_dismiss_warning` — marks security findings as dismissed (false positive / test fixture / rotated secret)
+- `optima_forget` — deletes a stale memory (gotcha, rule, or task outcome) with CLAUDE.md regeneration
+- Security scanner: dismissed findings preserved on re-index — dismissed state survives full reindex via save/restore
+- Structured JSON logging to stderr via `src/utils/logger.ts` (controlled by `OPTIMA_LOG_LEVEL` env var, default: DEBUG)
 - Project analyzer: detect tech stack, build/test/lint commands, project domain/purpose (from README/package.json description), and linter/formatter presence (see authoritative list in `02_data_model_and_schema.md` — suppresses style rules in generated [CLAUDE.md](http://CLAUDE.md))
 - File indexer: walk project (respecting .gitignore), track mtimes, compute hashes
 - Entity extractor: Tree-sitter parsing for TypeScript (functions, classes, interfaces, types, exports)
@@ -193,7 +217,7 @@ optima/
 - `.claude/rules/optima-feedback.md` generator (the inception loop)
 - `.gitignore` management
 - SQLite database with Drizzle schema and versioning
-- Single language support: TypeScript
+- Single language support: TypeScript and JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`)
 - Dogfood: Optima manages its own [CLAUDE.md](http://CLAUDE.md)
 - 80%+ test coverage
 

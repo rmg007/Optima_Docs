@@ -137,7 +137,7 @@ The `handleGetContext` handler internals.
 
 | Event | Level | Key Fields |
 |-------|-------|------------|
-| `cold start detected — running project analysis` | INFO | `path`, `project_root` |
+| `cold start detected — running project analysis` | INFO | `path`, `project_root`, `analysis_root` |
 | `warm start` | DEBUG | `path` |
 | `file walk complete` | DEBUG | `path`, `files_found`, `already_indexed` |
 | `entities extracted` | DEBUG | `file`, `count` |
@@ -179,6 +179,7 @@ The `handleReindex` handler internals.
 | Event | Level | Key Fields |
 |-------|-------|------------|
 | `starting reindex` | INFO | `path` |
+| `project analysis root` | DEBUG | `{ analysis_root }` — fires before analyzeProject in reindex |
 | `cleared stale index` | DEBUG | `path`, `files_deleted` |
 | `file walk complete` | DEBUG | `files_found` |
 | `entities extracted` | DEBUG | `file`, `count` |
@@ -204,6 +205,7 @@ Tech stack and project metadata detection.
 | Event | Level | Key Fields |
 |-------|-------|------------|
 | `project analysis complete` | INFO | `name`, `tech_stack`, `build_command`, `test_command`, `lint_command`, `linters_detected`, `key_dependencies_count`, `has_purpose` |
+| `findAnalysisRoot resolved` | DEBUG | `{ requested, project_root, analysis_root }` — fires when the analysis root differs from the requested path (workspace-parent CWD scenario) |
 
 ### `claude-md`
 CLAUDE.md generator.
@@ -286,6 +288,35 @@ The following are **never** written to logs, regardless of log level:
 - **API keys, tokens, or credentials** from any source.
 
 This policy ensures that log files can be shared for debugging without risk of leaking secrets.
+
+---
+
+## Workspace-Parent CWD Pattern
+
+When Claude Code is opened at a parent directory (e.g. `C:/dev/workspace`) rather than directly at a project root (e.g. `C:/dev/workspace/my-app`), the `findAnalysisRoot()` helper in `src/indexer/project-analyzer.ts` walks up from the requested path to find the nearest ancestor directory containing a manifest file (`package.json`, `pyproject.toml`, `Cargo.toml`, or `go.mod`). This resolved directory is used as the `analysis_root` for `analyzeProject()`.
+
+**Observable in logs:**
+```json
+{ "component": "project-analyzer", "level": "DEBUG", "msg": "findAnalysisRoot resolved", "requested": "C:/dev/workspace", "project_root": "C:/dev/workspace", "analysis_root": "C:/dev/workspace/my-app" }
+```
+
+When `analysis_root` differs from `project_root`, it means Claude Code's CWD was at a workspace parent and Optima automatically found the real project root. If `analysis_root` equals `project_root` (or equals the requested path), the CWD was already at the project root — no adjustment needed.
+
+---
+
+## Security Findings and Dismissed State
+
+Dismissed security findings (those with `dismissed = true`) are persisted across re-index operations:
+
+- **`optima_get_context` lazy re-index:** Only `dismissed = 0` findings are deleted before re-scanning changed files. Dismissed findings are preserved.
+- **`optima_reindex` full reindex:** Dismissed findings are saved to a temporary list before the cascade-delete of `file_index` rows. After re-indexing completes, they are restored (re-inserted) by matching the original `(file_path, line, pattern_name)` key.
+
+**Observable in logs:**
+```json
+{ "component": "reindex", "level": "DEBUG", "msg": "dismissed findings saved for restore", "count": 3 }
+{ "component": "reindex", "level": "DEBUG", "msg": "dismissed findings restored", "restored": 3, "not_found": 0 }
+```
+`not_found` > 0 means a dismissed finding's file no longer exists after the reindex (the file was deleted) — those findings are discarded rather than restored.
 
 ---
 

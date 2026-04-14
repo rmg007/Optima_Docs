@@ -22,6 +22,30 @@ All data lives in ONE SQLite database: `.optima/optima.db` at the project root.
 
 **Concurrency:** `better-sqlite3` is synchronous and single-threaded — only one write can happen at a time within the process. If Claude Code sends two tool calls concurrently, the MCP SDK's stdio transport serializes them (stdio is a single message stream). There is no concurrent write contention within a single Optima process. If two separate Claude Code sessions point at the same project, SQLite's WAL mode handles reader/writer concurrency correctly, but two writers will serialize via SQLite's file-level lock.
 
+---
+
+## Database Initialization & Pruning
+
+### Automatic Record Pruning
+
+On cold start (first database initialization), the connection layer prunes stale records before returning the database connection:
+
+1. **`generation_log`:** Keeps only the last 50 entries **per distinct `file_path`**. Older entries are deleted.
+   - This is per-file, not global — `CLAUDE.md` regeneration history and `.claude/rules/` regeneration history are tracked and pruned separately.
+
+2. **`task_outcomes`:** Keeps only the last 50 entries **globally** (across all directories).
+   - Single global cap, not per-directory.
+
+**When pruning runs:** Once, during `initializeDatabase()`, before the connection is returned to the caller. Not during tool calls.
+
+**CLAUDE.md impact:** The instruction budget algorithm (`claude-md.ts`) always queries from the unpruned live data. Recent gotchas and task insights are never silently lost — only records older than the 50-entry window are pruned.
+
+**Observable in logs:**
+```json
+{ "component": "db", "msg": "pruned old records", "generation_log_rows_deleted": 12, "task_outcomes_rows_deleted": 0 }
+```
+This line appears at DEBUG level during every cold start. If it shows non-zero deletes, the database has grown beyond the retention window.
+
 ## Drizzle Schema Definitions
 
 Copy these into `src/db/schema.ts` verbatim.
@@ -194,6 +218,17 @@ export const securityFindings = sqliteTable("security_findings", {
 // pattern name and line number. The secret scanning step in the file indexer
 // (Doc 03, step 5a) is responsible for redacting before storage.
 // See also Doc 00 "DO NOT" list: "DO NOT store the actual secret value."
+//
+// UNIQUE CONSTRAINT (added by migration 003): security_findings has a UNIQUE index on
+// (file_id, line, pattern_name). This enables INSERT OR IGNORE semantics — re-indexing
+// the same file does not create duplicate findings.
+//
+// DISMISSED STATE PERSISTENCE:
+// - On `optima_get_context` lazy re-index: only rows with dismissed=0 are deleted before
+//   re-scanning; dismissed=1 rows are preserved regardless.
+// - On `optima_reindex` (full): dismissed findings are saved to a temp list before the
+//   cascade-delete of file_index rows, then restored after re-indexing completes. This
+//   ensures dismissed state survives a full reindex.
 
 // ── Generation Log ────────────────────────────────────────────
 
@@ -733,6 +768,21 @@ export interface ProjectAnalysis {
  *  Parses dependency versions from package.json for entries matching DEPENDENCY_MAP.
  *  Upserts result into project_meta table. Returns the analysis. */
 export function analyzeProject(db: Database, projectRoot: string): ProjectAnalysis;
+
+/** findAnalysisRoot — Workspace-Parent CWD Helper
+ *
+ * When Claude Code is opened at a workspace parent directory (e.g. `C:/dev/workspace`)
+ * rather than the project root (e.g. `C:/dev/workspace/my-app`), the CWD does not contain
+ * a package.json and `analyzeProject` would return all-null project metadata.
+ *
+ * `findAnalysisRoot(requestedPath)` walks UP from the requested path to find the nearest
+ * ancestor directory containing `package.json`, `pyproject.toml`, `Cargo.toml`, or `go.mod`.
+ * If found, that directory is used as the `analysis_root` passed to `analyzeProject`.
+ * If not found (e.g. the path is already at a filesystem root), falls back to `requestedPath`.
+ *
+ * Callers: `handleGetContext` (step 2) and `handleReindex` both call `findAnalysisRoot`
+ * before calling `analyzeProject`. The resolved `analysis_root` is logged at DEBUG level. */
+export function findAnalysisRoot(requestedPath: string): string;
 ```
 
 ### `src/generator/claude-md.ts`
@@ -765,6 +815,22 @@ export function generateFeedbackRules(projectRoot: string): boolean;
 - **Task outcomes:** Keep last 50 entries. Prune oldest entries beyond 50 during `getDatabase()` initialization. Task outcomes are proactive knowledge with diminishing relevance — old outcomes about abandoned approaches from 6 months ago are less useful than recent ones.
 - **Generation log:** Keep last 50 entries per file path. Prune during `getDatabase()` initialization (runs once on cold start, not on every tool call). SQL: `DELETE FROM generation_log WHERE id NOT IN (SELECT id FROM generation_log WHERE file_path = ? ORDER BY generated_at DESC LIMIT 50)` for each distinct `file_path`.
 
+### Binary File Extensions (Always Skipped)
+
+The file walker skips files with these extensions regardless of `.gitignore` rules. They are never indexed, never entity-extracted, and never scanned for secrets:
+
+**Images:** `.png` `.jpg` `.jpeg` `.gif` `.ico` `.webp` `.bmp` `.svg`  
+**Fonts:** `.woff` `.woff2` `.ttf` `.eot` `.otf`  
+**Media:** `.mp3` `.mp4` `.wav` `.ogg` `.webm` `.avi` `.mov`  
+**Archives:** `.zip` `.tar` `.gz` `.bz2` `.7z` `.rar`  
+**Documents:** `.pdf`  
+**Compiled/native:** `.exe` `.dll` `.so` `.dylib` `.bin`  
+**Databases:** `.db` `.sqlite` `.sqlite3`  
+
+**Rationale:** Binary files produce meaningless entity extraction output and cannot contain human-readable secrets. Skipping them reduces indexing time and prevents garbage data in `file_index`.
+
+**Note:** `.svg` is listed as binary here because Tree-sitter entity extraction is meaningless on XML/SVG markup. SVG files ARE human-readable but are skipped for entity purposes. They are also not secret-scanned.
+
 ## Schema Migration Strategy
 
 Optima does NOT use Drizzle Kit's migration system at runtime. Migrations are hand-written SQL scripts executed programmatically by `src/db/migrations.ts`. This keeps the runtime dependency minimal and avoids requiring `drizzle-kit` as a production dependency.
@@ -772,10 +838,10 @@ Optima does NOT use Drizzle Kit's migration system at runtime. Migrations are ha
 **Migration file convention:**
 ```
 src/db/migrations/
-├── 001_initial.ts        # Creates 9 tables (8 Drizzle-modeled + schema_version)
-├── 002_fts5.ts           # FTS5 virtual tables + sync triggers for gotchas and rules
-├── 003_phase2_pruning.ts # Adds hit_count + pinned to rules (future)
-└── index.ts              # Exports ordered migration list
+├── 001_initial.ts                    # Creates 9 tables (8 Drizzle-modeled + schema_version)
+├── 002_fts5.ts                       # FTS5 virtual tables + sync triggers for gotchas and rules
+├── 003_security_findings_unique.ts   # UNIQUE index on security_findings(file_id, line, pattern_name); deduplicates existing rows before adding constraint; enables INSERT OR IGNORE semantics
+└── index.ts                          # Exports ordered migration list
 ```
 
 **Each migration file exports:**
@@ -1027,6 +1093,21 @@ function searchRulesFts(db: Database, query: string, limit: number): number[] {
 ```
 
 **FTS5 query syntax notes:** The `MATCH` operator supports implicit AND (`auth timeout` matches rows containing both words), quoted phrases (`"auth timeout"` matches the exact phrase), prefix queries (`auth*`), and boolean operators (`auth OR timeout`). Optima passes the raw `search_query` string from the tool input directly to `MATCH` — FTS5 handles tokenization. If the query contains FTS5 syntax errors, catch the SQLite error and fall back to directory-only matching (do not throw).
+
+### Migration 003: Security Findings Deduplication Index
+
+**Version:** 3
+**Applied:** At cold start, after migration 002
+
+**Change:**
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_security_findings_unique
+  ON security_findings(file_id, line, pattern_name);
+```
+
+**Behavior:** Enables `INSERT OR IGNORE` semantics. When a file is re-indexed and the same secret pattern is found at the same file+line combination, the insert is silently ignored — no duplicate, no error. Dismissed findings (where `dismissed = true`) are preserved on re-index as long as the pattern is still detected at the same location.
+
+**Rationale:** Without this index, re-indexing a file that contains a secret would create duplicate `security_findings` rows (one per re-index). The unique index makes re-indexing idempotent.
 
 ## Phase 2 Schema Migration
 

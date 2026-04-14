@@ -13,14 +13,15 @@ An MCP server that indexes your project, remembers what errors you've hit and ho
 | 1 | `00_start_here.md` | This file. Rules, tech stack, constraints. |
 | 2 | `01_product_spec_mvp.md` | What Optima is, how it works, what to build, project structure. |
 | 3 | `02_data_model_and_schema.md` | Drizzle schemas, TypeScript interfaces, SQLite tables. Copy verbatim. |
-| 4 | `03_mcp_tool_contracts.md` | Zod input/output schemas for all 3 tools. Copy verbatim. |
+| 4 | `03_mcp_tool_contracts.md` | Zod input/output schemas for all 5 tools. Copy verbatim. |
 | 5 | `04_inception_payload.md` | Exact file content Optima generates in host projects. Copy verbatim. |
+| 6 | `06_observability.md` | Structured JSON logging, log levels, component event tables. |
 
 ## Tech Stack (Locked)
 
 | Component | Choice | Command |
 | --- | --- | --- |
-| Runtime | Bun | `bun run`, `bun test`, `bunx` — never `npm`, `npx`, or `node` |
+| Runtime | Bun / Node | Build/test: Bun only (`bun run`, `bun test`, `bunx` — never `npm` or `npx`). Runtime: spawned by Claude Code/Desktop as `node dist/index.js` — never use `bun:sqlite` or Bun-only APIs in the compiled output. |
 | Language | TypeScript | Strict mode. No `any`. |
 | MCP SDK | `@modelcontextprotocol/sdk` | Stdio transport only. |
 | Database | SQLite via `better-sqlite3` | Single file at `.optima/optima.db`. Uses better-sqlite3 for runtime portability (works on both Bun and Node). See resolved Q6. |
@@ -55,17 +56,17 @@ Copy these configuration files verbatim when bootstrapping the project.
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "better-sqlite3": "^11.7.0",
-    "drizzle-orm": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.9.0",
+    "drizzle-orm": "^0.45.2",
     "ignore": "^7.0.0",
-    "tree-sitter": "^0.22.0",
-    "tree-sitter-typescript": "^0.23.0",
-    "zod": "^3.24.0"
+    "tree-sitter": "^0.25.0",
+    "tree-sitter-typescript": "^0.23.2",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
-    "drizzle-kit": "^0.30.0",
+    "drizzle-kit": "^0.31.10",
     "tsup": "^8.3.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
@@ -109,7 +110,7 @@ export default defineConfig({
   target: "node20",
   outDir: "dist",
   clean: true,
-  dts: true,
+  dts: false,
   sourcemap: true,
   banner: { js: "#!/usr/bin/env node" },
   external: ["better-sqlite3", "tree-sitter", "tree-sitter-typescript"],
@@ -171,7 +172,7 @@ Every module is referenced by these paths across the corpus. If a stale document
 | `src/tools/get-context.ts` | optima_get_context implementation (11-step behavior) | Doc 03 |
 | `src/tools/memorize.ts` | optima_memorize implementation | Doc 03 |
 | `src/tools/reindex.ts` | optima_reindex implementation | Doc 03 |
-| `src/indexer/project-analyzer.ts` | Tech stack detection, command discovery, linter detection | Doc 02 |
+| `src/indexer/project-analyzer.ts` | Tech stack detection, command discovery, linter detection, `findAnalysisRoot` helper | Doc 02 |
 | `src/indexer/file-indexer.ts` | File walking, mtime checking, hash computation | Doc 03 |
 | `src/indexer/entity-extractor.ts` | Tree-sitter AST parsing → entities | Doc 03 |
 | `src/memory/gotcha-ledger.ts` | Error → solution CRUD with hierarchical matching | Doc 03 |
@@ -188,6 +189,10 @@ Every module is referenced by these paths across the corpus. If a stale document
 | `src/utils/hasher.ts` | SHA-256 content hashing | Doc 01 |
 | `src/utils/paths.ts` | Path normalization, .gitignore matching | Doc 00 (Ground Rule 7) |
 | `src/utils/errors.ts` | Error taxonomy (OptimaError) | Doc 03 |
+| `src/utils/logger.ts` | Structured JSON logger (all output to stderr, controlled by OPTIMA_LOG_LEVEL) | Doc 06 |
+| `src/tools/dismiss-warning.ts` | optima_dismiss_warning implementation | Doc 03 |
+| `src/tools/forget.ts` | optima_forget implementation | Doc 03 |
+| `src/db/migrations/003_security_findings_unique.ts` | UNIQUE index on security_findings(file_id, line, pattern_name) | Doc 02 |
 
 ---
 
@@ -263,7 +268,7 @@ Optima operates alongside Claude Code. Understanding Claude Code's internal stat
 - **DO NOT index Claude Code's internal state.** Never read or index `~/.claude/`, `.claude/session-env/`, `.claude/projects/`, or `.claude/file-history/`.
 - **DO NOT build a web UI, CLI interface, or REST API.** Optima is a headless MCP server. Stdio transport only.
 - **DO NOT implement Phase 2 features.** No agent generation, no token optimization scoring, no adaptive prompts, no hook-based feedback. If it's not in `01_product_spec_mvp.md` included list, don't build it.
-- **DO NOT use `npm`, `npx`, or `node` commands.** Bun only.
+- **DO NOT use `npm` or `npx` commands for development.** Bun only for build and test. The compiled output runs under `node` at runtime (spawned by Claude Code).
 - **DO NOT use `bun:sqlite` directly.** Use `better-sqlite3` for runtime portability (resolved Q6 — allows fallback to Node if Bun's MCP spawner has issues). If Bun is proven reliable, can swap to `bun:sqlite` as a future optimization.
 - **DO NOT install `axios`, `node-fetch`, `express`, `react`, or `electron`.** This project has no HTTP client, no HTTP server, no frontend.
 - **DO NOT create a separate database file for learning/memory.** Everything lives in one SQLite database: `.optima/optima.db`.

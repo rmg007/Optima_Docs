@@ -69,7 +69,7 @@ Add this after every build step's "Definition of Done":
 
 **Build Prompt:**
 
-> Create `src/types.ts` by transcribing all TypeScript interfaces from Doc 02 (TypeScript interfaces section). Include: `GetContextInput`, `GetContextOutput`, `MemorizeInput`, `MemorizeOutput`, `ReindexInput`, `ReindexOutput`, `OptimaError`, and all supporting types. Create `src/schemas.ts` by copying all Zod schemas from Doc 03 (Zod Schemas section): `GetContextInputSchema`, `GetContextOutputSchema`, `MemorizeInputSchema`, `MemorizeOutputSchema`, `ReindexInputSchema`, `ReindexOutputSchema`. Create `src/utils/errors.ts` with the `OptimaError` class and all error codes from the error taxonomy in Doc 03. No implementation logic -- types, schemas, and error class only.
+> Create `src/types.ts` by transcribing all TypeScript interfaces from Doc 02 (TypeScript interfaces section). Include: `GetContextInput`, `GetContextOutput`, `MemorizeInput`, `MemorizeOutput`, `ReindexInput`, `ReindexOutput`, `OptimaError`, and all supporting types. Create `src/schemas.ts` by copying all Zod schemas from Doc 03 (Zod Schemas section): `GetContextInputSchema`, `GetContextOutputSchema`, `MemorizeInputSchema`, `MemorizeOutputSchema`, `ReindexInputSchema`, `ReindexOutputSchema`, `DismissWarningInputSchema`, `DismissWarningOutputSchema`, `ForgetInputSchema`, `ForgetOutputSchema`. Create `src/utils/errors.ts` with the `OptimaError` class and all error codes from the error taxonomy in Doc 03. Also create `src/utils/logger.ts` with the structured JSON logger: all output to stderr, JSON lines format, controlled by `OPTIMA_LOG_LEVEL` env var (default: DEBUG). Expose `setLogLevel()` and `resetLogLevel()` for test isolation. No implementation logic beyond the logger -- types, schemas, and error class only.
 
 **Verification:**
 
@@ -82,9 +82,10 @@ Add this after every build step's "Definition of Done":
 **Definition of Done:**
 
 - [ ] All TypeScript interfaces from Doc 02 are in `src/types.ts`
-- [ ] All Zod input/output schemas from Doc 03 are in `src/schemas.ts`
+- [ ] All Zod input/output schemas from Doc 03 are in `src/schemas.ts` (including `DismissWarningInputSchema`, `DismissWarningOutputSchema`, `ForgetInputSchema`, `ForgetOutputSchema`)
 - [ ] `OptimaError` class matches Doc 03 definition exactly
 - [ ] All error codes from Doc 03 error taxonomy are present
+- [ ] `src/utils/logger.ts` created with structured JSON logger (stderr, OPTIMA_LOG_LEVEL, default DEBUG, `setLogLevel()`/`resetLogLevel()` for test isolation)
 - [ ] Files build cleanly
 
 ---
@@ -116,9 +117,10 @@ Add this after every build step's "Definition of Done":
 
 - [ ] All 8 Drizzle tables + schema_version match Doc 02 schema exactly
 - [ ] FTS5 virtual tables created by migration 002 with sync triggers
+- [ ] Migration 003 (`003_security_findings_unique.ts`) adds UNIQUE index on security_findings(file_id, line, pattern_name) with deduplication pre-flight DELETE
 - [ ] `getDatabase()` is lazy
 - [ ] WAL mode and foreign keys enabled
-- [ ] Migration runner works (001 then 002 in order)
+- [ ] Migration runner works (001 then 002 then 003 in order)
 - [ ] Corruption recovery works
 - [ ] `.optima/.gitignore` created
 - [ ] 10+ unit tests
@@ -289,7 +291,7 @@ Add this after every build step's "Definition of Done":
 
 ### Step 8: MCP Server & Tool Registration
 
-**Files to create:** `src/index.ts`, `src/server.ts`, `src/tools/get-context.ts` (stub), `src/tools/memorize.ts` (stub), `src/tools/reindex.ts` (stub)
+**Files to create:** `src/index.ts`, `src/server.ts`, `src/tools/get-context.ts` (stub), `src/tools/memorize.ts` (stub), `src/tools/reindex.ts` (stub), `src/tools/dismiss-warning.ts` (stub), `src/tools/forget.ts` (stub)
 
 **Dependencies:** Steps 1--7
 
@@ -297,9 +299,9 @@ Add this after every build step's "Definition of Done":
 
 **Build Prompt:**
 
-> Create `src/index.ts` (entry point) and `src/server.ts` (tool registration) by copying the implementations from Doc 03. Include signal handling (SIGINT, SIGTERM for graceful shutdown), the `wrapError()` pattern for MCP error responses, and registration of all 3 tools: `optima_get_context`, `optima_memorize`, `optima_reindex`. Use the exact tool description strings from the "Tool Descriptions for Tool Search" table in Doc 03 -- these are critical for Claude Code's Tool Search discoverability.
+> Create `src/index.ts` (entry point) and `src/server.ts` (tool registration) by copying the implementations from Doc 03. Include signal handling (SIGINT, SIGTERM for graceful shutdown), the `wrapError()` pattern for MCP error responses, and registration of all 5 tools: `optima_get_context`, `optima_memorize`, `optima_reindex`, `optima_dismiss_warning`, and `optima_forget`. Use the exact tool description strings from the "Tool Descriptions for Tool Search" table in Doc 03 -- these are critical for Claude Code's Tool Search discoverability.
 >
-> **Important:** `src/server.ts` imports handler functions from `src/tools/`. Since the full handler implementations come in Step 9, create **stub files** now so this step compiles: `src/tools/get-context.ts`, `src/tools/memorize.ts`, `src/tools/reindex.ts`. Each stub exports the handler function with the correct signature, returning a `throw new OptimaError("NOT_IMPLEMENTED", "...")`. Step 9 will replace these stubs with full implementations.
+> **Important:** `src/server.ts` imports handler functions from `src/tools/`. Since the full handler implementations come in Step 9, create **stub files** now so this step compiles: `src/tools/get-context.ts`, `src/tools/memorize.ts`, `src/tools/reindex.ts`, `src/tools/dismiss-warning.ts`, `src/tools/forget.ts`. Each stub exports the handler function with the correct signature, returning a `throw new OptimaError("NOT_IMPLEMENTED", "...")`. Step 9 will replace these stubs with full implementations.
 
 **Verification:**
 
@@ -314,10 +316,10 @@ Add this after every build step's "Definition of Done":
 - [ ] `src/index.ts` matches Doc 03 entry point exactly
 - [ ] `src/server.ts` matches Doc 03 tool registration exactly
 - [ ] `src/server.ts` import `from "./schemas.js"` resolves to `src/schemas.ts` (created in Step 1)
-- [ ] Tool description strings match Doc 03 table exactly
+- [ ] Tool description strings match Doc 03 table exactly (all 5 tools)
 - [ ] Signal handling works
 - [ ] `wrapError()` handles both `OptimaError` and unknown errors
-- [ ] Stub handler files exist in `src/tools/` with correct export signatures (replaced in Step 9)
+- [ ] Stub handler files exist in `src/tools/` for all 5 tools (get-context, memorize, reindex, dismiss-warning, forget) with correct export signatures (replaced in Step 9)
 - [ ] `bun run build` succeeds (all imports resolve to stubs)
 - [ ] 5+ unit tests
 
@@ -333,7 +335,7 @@ Add this after every build step's "Definition of Done":
 
 **Build Prompt:**
 
-> Replace the stub handler files created in Step 8 with full implementations. `get-context.ts` follows the 11-step behavior from Doc 03 exactly: resolve path, validate traversal, check project_meta, query file_index, check mtimes, re-index changed files (with secret scanning step 5a), delete removed files, query gotchas (hierarchical match + FTS5 search if `search_query` provided), query rules (directory scoping + FTS5), query task_outcomes, query security_findings, collect recent_changes, assemble output with directory description using pure string concatenation (no LLM). `memorize.ts` handles all 5 types (error_fix, architectural_rule, pattern, preference, task_outcome) with type-specific validation and routing (error_fix → gotchas, architectural_rule/pattern/preference → rules, task_outcome → task_outcomes), error sanitization/normalization for error_fix type, and triggers CLAUDE.md regeneration after EVERY call. `reindex.ts` forces full re-index, re-runs project analysis, triggers CLAUDE.md regeneration, regenerates feedback rules file.
+> Replace the stub handler files created in Step 8 with full implementations. `get-context.ts` follows the 11-step behavior from Doc 03 exactly: resolve path, validate traversal, check project_meta, query file_index, check mtimes, re-index changed files (with secret scanning step 5a), delete removed files, query gotchas (hierarchical match + FTS5 search if `search_query` provided), query rules (directory scoping + FTS5), query task_outcomes, query security_findings, collect recent_changes, assemble output with directory description using pure string concatenation (no LLM). `memorize.ts` handles all 5 types (error_fix, architectural_rule, pattern, preference, task_outcome) with type-specific validation and routing (error_fix → gotchas, architectural_rule/pattern/preference → rules, task_outcome → task_outcomes), error sanitization/normalization for error_fix type, and triggers CLAUDE.md regeneration after EVERY call. `reindex.ts` forces full re-index, re-runs project analysis, triggers CLAUDE.md regeneration, regenerates feedback rules file. Also create `src/tools/dismiss-warning.ts` (sets dismissed=1 on security_findings by ID, returns remaining_warnings count, reports was_already_dismissed) and `src/tools/forget.ts` (deletes a memory by searching gotchas → rules → task_outcomes, triggers CLAUDE.md regeneration, throws `INVALID_INPUT` if memory_id not found in any table).
 
 **Verification:**
 
@@ -361,7 +363,11 @@ Add this after every build step's "Definition of Done":
 - [ ] `total_memories` = gotchas + rules + task_outcomes row count
 - [ ] CLAUDE.md regenerated after every memorize call (all 5 types)
 - [ ] reindex re-runs project analysis + CLAUDE.md + feedback rules
-- [ ] 20+ unit tests across all 3 handlers
+- [ ] `optima_dismiss_warning` sets dismissed=1, returns remaining_warnings and was_already_dismissed
+- [ ] `optima_forget` deletes from correct table (gotchas/rules/task_outcomes), regenerates CLAUDE.md
+- [ ] `optima_forget` throws `INVALID_INPUT` when memory_id not found in any table
+- [ ] Dismissed security findings preserved on full reindex (save before cascade delete, restore after)
+- [ ] 20+ unit tests across all 5 handlers
 
 ---
 

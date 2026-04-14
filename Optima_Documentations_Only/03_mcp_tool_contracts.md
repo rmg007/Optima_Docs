@@ -402,6 +402,39 @@ export const ReindexOutputSchema = z.object({
   claude_md_regenerated: z.boolean(),
   feedback_rules_written: z.boolean(),
 });
+
+// ── optima_dismiss_warning ────────────────────────────────────
+
+export const DismissWarningInputSchema = z.object({
+  finding_id: z.number(),
+  reason: z.string().max(500).optional(),
+});
+
+export const DismissWarningOutputSchema = z.object({
+  dismissed: z.boolean(),
+  finding_id: z.number(),
+  file: z.string(),
+  line: z.number(),
+  pattern_name: z.string(),
+  was_already_dismissed: z.boolean(),
+  remaining_warnings: z.number(),
+});
+
+// ── optima_forget ─────────────────────────────────────────────
+
+export const ForgetInputSchema = z.object({
+  memory_id: z.number(),
+  reason: z.string().max(500).optional(),
+});
+
+export const ForgetOutputSchema = z.object({
+  deleted: z.boolean(),
+  deleted_from: z.enum(["gotchas", "rules", "task_outcomes"]),
+  memory_id: z.number(),
+  total_memories: z.number(),
+  claude_md_regenerated: z.boolean(),
+  claude_md_instruction_count: z.number(),
+});
 ```
 
 ---
@@ -1147,7 +1180,7 @@ Every error thrown by Optima must use `OptimaError` with one of these codes:
 | `INDEX_FAILED` | File walking or mtime check fails | Recoverable |
 | `PARSE_FAILED` | Tree-sitter cannot parse a file | Recoverable (skip file) |
 | `DB_ERROR` | SQLite operation fails | Critical |
-| `INVALID_INPUT` | Zod validation fails on tool input | Recoverable |
+| `INVALID_INPUT` | Zod validation fails on tool input; also used by `optima_forget` when `memory_id` is not found in any table | Recoverable |
 | `PATH_NOT_FOUND` | Requested path does not exist | Recoverable |
 | `GENERATION_FAILED` | [CLAUDE.md](http://CLAUDE.md) or rules file generation fails | Recoverable |
 | `HASH_COLLISION` | Two different errors produce same normalized hash | Warn and store both |
