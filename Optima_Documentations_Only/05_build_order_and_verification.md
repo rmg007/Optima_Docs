@@ -461,3 +461,50 @@ Add this after every build step's "Definition of Done":
 - [ ] All integration tests pass
 - [ ] `bun run test` passes (all unit + integration tests)
 - [ ] `bun run build` succeeds
+
+---
+
+### Step 13: Installation & Health Check Scripts
+
+**Files to create:** `scripts/install.js`, `scripts/doctor.js`
+
+**Dependencies:** Step 12 (integration testing passes)
+
+**Estimated time:** 2 hours
+
+**Build Prompt:**
+
+> Create `scripts/install.js` — a one-command installer that registers Optima in both Claude Desktop and Claude Code config files. Features: (a) Cross-platform config discovery (Windows APPDATA/Roaming/Claude, macOS ~/Library/Application Support/Claude, Linux $XDG_CONFIG_HOME or ~/.config), (b) Automatic build trigger if `dist/index.js` missing, (c) Smoke-test verification — spawns `node dist/index.js` with 3-second timeout and parses stderr for "tools registered" and "transport connected" messages, (d) Atomic config writes using temp-file-plus-rename pattern with timestamped backup creation on first write, (e) Supports flags: `--desktop` (Claude Desktop only), `--code` (Claude Code only), `--log-level LEVEL` (override OPTIMA_LOG_LEVEL, default: DEBUG), `--uninstall` (removes Optima from configs), `-h`/`--help` (print usage), (f) Safe to re-run multiple times.
+>
+> Create `scripts/doctor.js` — a health check script that verifies the installation. Checks: (1) `dist/index.js` exists and report size/age, (2) server starts cleanly and registers all 5 tools via smoke-test (3s timeout), (3) Claude Desktop config path exists and has optima registered with correct path, (4) Claude Code config path (~/.claude.json) exists and has optima registered with correct path, (5) OPTIMA_LOG_LEVEL env var is set to a valid value. Exit code: 0 if all checks pass, 1 if any check fails. Safe to run in CI/CD pipelines.
+>
+> Both scripts use ANSI colors for output (green checkmark ✓, yellow warning !, red error ✗). Update `package.json` with: (a) bin entries for `optima-install` and `optima-doctor`, (b) npm scripts: `install:mcp`, `uninstall:mcp`, `doctor`, `postbuild` (chmod +x dist/index.js). Update README.md with one-command installation example and doctor output reference.
+
+**Verification:**
+
+- `npm run install:mcp` succeeds on first run
+- Config files created/updated atomically with backup
+- Smoke-test catches server startup failures
+- `npm run install:mcp --uninstall` removes Optima from both configs
+- `npm run doctor` exits with code 0 when install is healthy
+- `npm run doctor` exits with code 1 when install is broken
+- Cross-platform config paths work on Windows, macOS, Linux
+- postbuild hook makes `dist/index.js` executable on Unix
+
+**Definition of Done:**
+
+- [ ] `scripts/install.js` (~400 lines) implements full installer with all 6 features listed above
+- [ ] `scripts/doctor.js` (~200 lines) implements health check with all 5 verification checks
+- [ ] `package.json` updated with bin entries (`optima-install`, `optima-doctor`)
+- [ ] `package.json` updated with npm scripts (`install:mcp`, `uninstall:mcp`, `doctor`, `postbuild`)
+- [ ] Installer smoke-tests server by spawning `node dist/index.js` and parsing stderr
+- [ ] Installer backs up existing config files with timestamped suffix on first write
+- [ ] Installer uses atomic writes (temp file + rename) to prevent corruption
+- [ ] Installer is idempotent (safe to re-run)
+- [ ] Doctor script exits code 0 when all checks pass, code 1 when any fail
+- [ ] Doctor script works on Windows, macOS, Linux
+- [ ] Both scripts use ANSI colors for user feedback
+- [ ] README.md updated with `npm run install:mcp` as primary installation method
+- [ ] README.md includes sample output of `npm run doctor`
+- [ ] `npm run lint` passes (no TypeScript errors in scripts)
+- [ ] No new tests required (installer/doctor are utilities, not core logic)

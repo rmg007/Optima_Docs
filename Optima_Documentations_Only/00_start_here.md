@@ -44,7 +44,9 @@ Copy these configuration files verbatim when bootstrapping the project.
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "optima-mcp": "dist/index.js"
+    "optima-mcp": "dist/index.js",
+    "optima-install": "scripts/install.js",
+    "optima-doctor": "scripts/doctor.js"
   },
   "scripts": {
     "build": "tsup",
@@ -53,7 +55,11 @@ Copy these configuration files verbatim when bootstrapping the project.
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "install:mcp": "node scripts/install.js",
+    "uninstall:mcp": "node scripts/install.js --uninstall",
+    "doctor": "node scripts/doctor.js",
+    "postbuild": "node -e \"require('fs').chmodSync('dist/index.js', 0o755)\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -156,6 +162,28 @@ bun init -y
 bun add @modelcontextprotocol/sdk better-sqlite3 drizzle-orm ignore tree-sitter tree-sitter-typescript zod
 bun add -d @types/better-sqlite3 drizzle-kit tsup typescript vitest
 ```
+
+### Installation & Health Check Scripts
+
+Optima includes two utility scripts for seamless setup and verification:
+
+**`scripts/install.js`** — Registers Optima in both Claude Desktop and Claude Code config files
+
+- Cross-platform config file discovery (Windows, macOS, Linux)
+- Atomic writes with timestamped backups
+- Smoke-test verification (spawns server, verifies 5 tools register within 3 seconds)
+- Supports flags: `--desktop` (Claude Desktop only), `--code` (Claude Code only), `--log-level LEVEL`, `--uninstall`
+- Automatic build trigger if `dist/index.js` missing
+- Safe to re-run multiple times
+
+**`scripts/doctor.js`** — Health check for Optima installation
+
+- Verifies `dist/index.js` exists and is properly built
+- Smoke-tests server startup (checks tool registration)
+- Verifies both Claude Desktop and Claude Code configs are correctly registered
+- Validates paths point to the built binary
+- Returns exit code 0 if all checks pass, 1 if any fail
+- Safe to run in CI/CD pipelines
 
 ---
 
