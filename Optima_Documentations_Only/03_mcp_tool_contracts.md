@@ -19,6 +19,8 @@ These descriptions are critical for Claude Code's Tool Search system. They deter
 | `optima_get_context` | `Use before modifying any files in a directory, when encountering an error you haven't seen before, when starting work in a new area of the codebase, or when you need to understand what entities and patterns exist in a directory. Pass search_query with error text or keywords to find relevant gotchas and rules across the entire project, not just the current directory. Always call this before writing code.` |
 | `optima_memorize` | `Use after fixing any error, after discovering a rule the codebase follows, after noticing a recurring pattern, when the developer states a preference, or after completing a non-trivial task (to record the outcome and key learnings). Call immediately — do not batch or defer.` |
 | `optima_reindex` | `Use after major refactoring, after adding or removing significant dependencies, after restructuring directories, or when optima_get_context returns stale results that don't match the current file state.` |
+| `optima_dismiss_warning` | `Use to dismiss a security finding that is a false positive, test fixture, or already-rotated secret. Pass the finding_id from the security_warnings array in get_context output.` |
+| `optima_forget` | `Use to remove a stale, incorrect, or outdated memory (gotcha, rule, or task outcome). Pass the numeric id from the gotchas, architectural_rules, or task_insights arrays in get_context output. Triggers CLAUDE.md regeneration.` |
 
 **CSO Principles (from Superpowers writing-skills):**
 1. Descriptions = triggering conditions only, NOT workflow summaries
@@ -233,6 +235,7 @@ export const GetContextInputSchema = z.object({
   path: z.string().min(1).describe("Directory or file path to get context for"),
   task_type: z.enum(["bug_fix", "feature", "refactor", "test", "review"]).optional()
     .describe("Optional hint about the type of task being performed"),
+  // **Status: Reserved / Currently unused.** The field is accepted and validated but not yet used by the handler. It is intended as a future hint for context filtering (e.g., return gotchas more relevant to bug_fix vs. refactor tasks). For MVP, omit it from tool calls — it has no effect on the response.
   search_query: z.string().max(200).optional()
     .describe("Free-text search across gotchas and rules — enables cross-directory discovery. Pass the error message when debugging, or keywords like 'authentication timeout' to find relevant gotchas outside the current directory."),
 });
@@ -306,6 +309,7 @@ export const GetContextOutputSchema = z.object({
       detected_from: z.string().describe("Source file, e.g. 'package.json'"),
     })),
   }).describe("Dependency versions for key project dependencies (matching tech stack detection dictionary)"),
+  // **How `dependency_context.key_dependencies` is populated:** `project-analyzer.ts` parses `package.json` (both `dependencies` and `devDependencies`) and matches against an internal `DEPENDENCY_MAP` dictionary. Only known, significant dependencies are included — not every package. Examples of detected dependencies: `typescript`, `react`, `next` (→ next.js), `drizzle-orm` (→ drizzle), `vitest`, `@modelcontextprotocol/sdk` (→ mcp). The `detected_from` field is always `"package.json"` for MVP. The version string is the raw semver range from `package.json` (e.g., `"^0.39.0"`), not the resolved version.
   // Verification fields (for Iron Law 3: Evidence Before Claims)
   files_reindexed: z.number(),        // how many files had changed mtimes and were re-indexed
   files_removed: z.number(),          // how many deleted files were cleaned from the index
@@ -344,12 +348,14 @@ export const MemorizeInputSchema = z.object({
     .describe("Key insight from the task — what worked, what didn't, what was surprising (for task_outcome)"),
   duration_hint: z.string().max(50).optional()
     .describe("Rough time estimate, e.g. '~45min' — helps future task estimation (for task_outcome)"),
+  // **`duration_hint` format:** Free text, human-readable. No machine parsing is performed on this field — it is stored and displayed as-is. Convention: `"~45min"`, `"~2hr"`, `"~30min"`. The tilde prefix (`~`) signals approximation. Future sessions use this field to calibrate effort estimates. If the actual duration was very short (<5 minutes), omit the field rather than logging `"~0min"`.
   files: z.array(z.string()).optional()
     .describe("Files involved"),
   directory: z.string().optional()
     .describe("Directory scope"),
   tags: z.array(z.string()).optional()
     .describe("Freeform tags for retrieval"),
+  // **Tags (`tags?: string[]`):** Accepted and stored as a JSON array in all memory types (gotchas, rules, task outcomes). Currently orphaned — there is no query-by-tags capability and tags are not surfaced in `optima_get_context` output or CLAUDE.md generation. Reserved for Phase 2 filtering. For MVP, omit `tags` from all tool calls.
 }).refine(
   (data) => {
     if (data.type === "error_fix") return !!data.error && !!data.resolution;

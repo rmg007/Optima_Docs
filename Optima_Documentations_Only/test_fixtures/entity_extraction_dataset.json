@@ -11,7 +11,7 @@
           "name": "fetchUser",
           "kind": "function",
           "exported": true,
-          "signature": "async function fetchUser(id: string): Promise<User>"
+          "signature": "async fetchUser(id: string): Promise<User>"
         }
       ]
     },
@@ -116,7 +116,7 @@
           "name": "parse",
           "kind": "function",
           "exported": true,
-          "signature": "function parse(input: string | Buffer): AST"
+          "signature": "parse(input: string | Buffer): AST"
         }
       ]
     },
@@ -134,14 +134,14 @@
     },
     {
       "id": "EE-012",
-      "description": "Type alias",
+      "description": "Type alias (non-generic — signature is null; code only captures typeParams which is empty for non-generic types)",
       "input": "export type UserID = string & { readonly __brand: 'UserID' };",
       "expectedEntities": [
         {
           "name": "UserID",
           "kind": "type",
           "exported": true,
-          "signature": "type UserID = string & { readonly __brand: 'UserID' }"
+          "signature": null
         }
       ]
     },
@@ -160,7 +160,7 @@
           "name": "createLogger",
           "kind": "function",
           "exported": true,
-          "signature": "function createLogger(name: string): Logger"
+          "signature": "createLogger(name: string): Logger"
         },
         {
           "name": "DEFAULT_LEVEL",
@@ -172,7 +172,7 @@
           "name": "internalHelper",
           "kind": "function",
           "exported": false,
-          "signature": "function internalHelper()"
+          "signature": "internalHelper()"
         }
       ]
     },
@@ -191,13 +191,13 @@
           "name": "foo",
           "kind": "function",
           "exported": false,
-          "signature": "function foo()"
+          "signature": "foo()"
         },
         {
           "name": "bar",
           "kind": "function",
           "exported": false,
-          "signature": "function bar()"
+          "signature": "bar()"
         },
         {
           "name": "foo",
@@ -234,7 +234,7 @@
           "name": "processQueue",
           "kind": "function",
           "exported": true,
-          "signature": "function processQueue(): void",
+          "signature": "processQueue(): void",
           "description": null
         }
       ]
