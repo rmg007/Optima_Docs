@@ -2,7 +2,7 @@
 
 ## What Optima Is
 
-Optima is an MCP server for Claude Code. It runs locally via Stdio transport, analyzes the developer’s project, remembers solutions to errors, and maintains intelligence files (`CLAUDE.md`, `.claude/rules/`) that make Claude Code smarter with every session.
+Optima is an MCP server **focused on Claude Code CLI**. It runs locally via Stdio transport, analyzes the developer’s project, remembers solutions to errors, and maintains intelligence files (`CLAUDE.md`, `.claude/rules/`) that make Claude Code smarter with every session. Sibling project for VS Code Copilot: [Roadie](https://github.com/rmg007/Roadie).
 
 ## Installation (Plug & Play)
 
@@ -83,11 +83,26 @@ Then restart Claude Desktop/Code for the server to be spawned on session start.
 > - The developer's session quality compounds without any manual intervention.
 > 
 
+## Autonomous Hooks Layer
+
+The bulk of Optima's learning loop runs deterministically through Claude Code lifecycle hooks registered in `~/.claude/settings.json`:
+
+| Event | Matcher | Invokes | Purpose |
+| --- | --- | --- | --- |
+| `SessionStart` | — | `optima-hook prime --project ${CWD}` | Lazy re-index (mtime-delta); refreshes `project_meta`. |
+| `PostToolUse` | `Edit|Write|MultiEdit` | `optima-hook observe --tool ${TOOL} --file ${FILE}` | Records an `edit_events` row. |
+| `Stop` | — | `optima-hook reconcile --project ${CWD}` | Increments `hit_count` on overlapping gotchas, inserts `task_outcomes` on heuristic task completion. |
+
+The hook CLI (`bin/optima-hook.ts`, built to `dist/optima-hook.js`) is a separate entry from the MCP server, opens `.optima/optima.db` directly, and shares `src/db/`, `src/indexer/`, `src/memory/` modules. Contract: always exits 0, writes nothing to stdout, wraps everything in try/catch. Hooks cannot fail Claude Code workflows, and must never corrupt the MCP JSON-RPC stream.
+
+The installer registers all three hooks via `scripts/install.js` (append-only merge — existing hook entries are preserved). Use `--no-hooks` to skip.
+
 ## The Inception Pattern
 
-MCP servers cannot passively observe Claude Code conversations. They only activate when called. Optima solves this by generating `.claude/rules/optima-feedback.md` — a rules file that instructs Claude Code when and how to call Optima’s tools. Optima writes the instructions that teach its consumer how to feed it data. The intelligence layer bootstraps its own feedback loop.
+MCP servers cannot passively observe Claude Code conversations. They only activate when called. Optima solves this with a two-layer strategy:
 
-> **Design note:** Rules are advisory (the LLM decides whether to follow them). Claude Code also supports deterministic **hooks** in `.claude/settings.json` that fire automatically at lifecycle points (`PostToolUse`, `TaskCompleted`, etc.). For MVP, rules are sufficient and simpler. Phase 2 adds hook-based automation as a dual-layer enhancement.
+1. **Hooks layer (deterministic):** the autonomous capture loop above — edits, session transitions, task completion — runs without any LLM involvement.
+2. **Rules layer (advisory):** `.claude/rules/optima-feedback.md` covers the two moments where the LLM's judgement is required — starting work in a new directory (`optima_get_context`) and memorializing a non-trivial error fix (`optima_memorize`).
 
 ### Cold Start Bootstrap Sequence
 
@@ -242,11 +257,16 @@ optima/
 - `optima_forget` — deletes a stale memory (gotcha, rule, or task outcome) with CLAUDE.md regeneration
 
 **Installation & Health Check:**
-- `scripts/install.js` — One-command plug-and-play installer for Claude Desktop & Code
-- `scripts/doctor.js` — Health check utility (verifies installation is correct)
+- `scripts/install.js` — One-command plug-and-play installer for Claude Desktop & Code; also registers lifecycle hooks in `~/.claude/settings.json` (skip with `--no-hooks`)
+- `scripts/doctor.js` — Health check utility (5 checks: build, smoke test, Desktop config, Code config, hooks)
 - `npm run install:mcp` — Primary installation method (replaces manual config)
-- `npm run uninstall:mcp` — Clean uninstall from both Claude clients
+- `npm run uninstall:mcp` — Clean uninstall from both Claude clients and remove hook entries
 - `npm run doctor` — Verify installation health
+
+**Autonomous Hooks Layer:**
+- `bin/optima-hook.ts` → `dist/optima-hook.js` — Claude Code lifecycle hook bridge with `prime`, `observe`, `reconcile` subcommands
+- Migration `004_edit_events` — adds `edit_events(id, file_id, path, tool_name, ts_ms, session_id)` table
+- Append-only merge of hook entries in `~/.claude/settings.json` (SessionStart / PostToolUse / Stop)
 
 **Indexing & Analysis:**
 - Security scanner: dismissed findings preserved on re-index — dismissed state survives full reindex via save/restore

@@ -6,6 +6,18 @@
 
 An MCP server that indexes your project, remembers what errors you've hit and how you fixed them, and maintains a [CLAUDE.md](http://CLAUDE.md) that makes every Claude Code session smarter than the last.
 
+**Optima is focused on Claude Code CLI.** It ships a plug-and-play installer (`npm run install:mcp`) that registers both the MCP server and Claude Code lifecycle hooks (SessionStart / PostToolUse / Stop) in `~/.claude/settings.json`. Using VS Code Copilot? See the sibling project [Roadie](https://github.com/rmg007/Roadie).
+
+## Lifecycle Hooks
+
+Most of Optima's learning loop is autonomous — it runs through Claude Code's lifecycle hooks, not explicit tool calls from the assistant:
+
+- **SessionStart** → `optima-hook prime --project <cwd>` — opens `.optima/optima.db`, runs a lazy (mtime-delta) re-index.
+- **PostToolUse** (matcher `Edit|Write|MultiEdit`) → `optima-hook observe --tool <name> --file <path>` — records an `edit_events` row.
+- **Stop** → `optima-hook reconcile --project <cwd>` — increments `hit_count` on gotchas touching edited files and inserts a `task_outcomes` row when heuristics detect a completed task (>= 3 edits across >= 2 files).
+
+The CLI is a separate entry point (`bin/optima-hook.ts` → `dist/optima-hook.js`). It always exits 0 and writes nothing to stdout — hooks cannot fail workflows and hooks never corrupt the MCP JSON-RPC stream. See `06_observability.md` for hook log components.
+
 ## Reading Order
 
 | Order | File | Purpose |
@@ -45,6 +57,7 @@ Copy these configuration files verbatim when bootstrapping the project.
   "main": "dist/index.js",
   "bin": {
     "optima-mcp": "dist/index.js",
+    "optima-hook": "dist/optima-hook.js",
     "optima-install": "scripts/install.js",
     "optima-doctor": "scripts/doctor.js"
   },

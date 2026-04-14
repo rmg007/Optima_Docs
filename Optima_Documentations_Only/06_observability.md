@@ -275,6 +275,40 @@ File system walker for project indexing.
 |-------|-------|------------|
 | `walk complete` | DEBUG | `root`, `files_found`, `skipped_ignored`, `skipped_binary`, `skipped_symlinks` |
 
+### `hook.cli`
+Top-level entry for `bin/optima-hook.ts`. Fires when an unknown or missing subcommand is passed (no-op path) or when the outer try/catch swallows an otherwise uncaught error (exit 0 contract).
+
+| Event | Level | Key Fields |
+|-------|-------|------------|
+| `unknown or missing subcommand — no-op` | DEBUG | `argv` |
+| `uncaught error — swallowed to keep exit 0` | ERROR | `error`, `stack` |
+
+### `hook.prime`
+SessionStart hook. Lazy mtime-delta re-index.
+
+| Event | Level | Key Fields |
+|-------|-------|------------|
+| `prime complete` | INFO | `project`, `files_changed`, `files_skipped`, `files_total`, `duration_ms` |
+| `project analysis failed` | WARN | `error` |
+
+### `hook.observe`
+PostToolUse hook (matcher `Edit|Write|MultiEdit`). Records one `edit_events` row per invocation.
+
+| Event | Level | Key Fields |
+|-------|-------|------------|
+| `edit recorded` | DEBUG | `tool`, `path`, `file_id`, `session_id` |
+| `missing --tool or --file — skipping` | DEBUG | — |
+
+### `hook.reconcile`
+Stop hook. Walks recent `edit_events`, increments `gotchas.hit_count` on file-overlap, optionally inserts `task_outcomes`.
+
+| Event | Level | Key Fields |
+|-------|-------|------------|
+| `no recent edit events — nothing to reconcile` | DEBUG | `project` |
+| `incremented gotcha hit_count` | INFO | `gotchas_touched`, `files_edited` |
+| `task_outcome inserted (heuristic)` | INFO | `files`, `edits`, `directory` |
+| `reconciliation complete` | INFO | `project`, `events_seen`, `files_touched` |
+
 ---
 
 ## Security Policy: What Is Never Logged

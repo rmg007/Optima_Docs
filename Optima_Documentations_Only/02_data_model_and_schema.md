@@ -1109,6 +1109,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_security_findings_unique
 
 **Rationale:** Without this index, re-indexing a file that contains a secret would create duplicate `security_findings` rows (one per re-index). The unique index makes re-indexing idempotent.
 
+### Migration 004: Edit Events (Autonomous Hooks Layer)
+
+**Version:** 4
+**Applied:** At cold start, after migration 003
+
+**Change:**
+```sql
+CREATE TABLE IF NOT EXISTS edit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id INTEGER REFERENCES file_index(id) ON DELETE SET NULL,
+  path TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  ts_ms INTEGER NOT NULL,
+  session_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_edit_events_ts ON edit_events(ts_ms);
+CREATE INDEX IF NOT EXISTS idx_edit_events_path ON edit_events(path);
+CREATE INDEX IF NOT EXISTS idx_edit_events_session ON edit_events(session_id);
+```
+
+**Columns:**
+- `id` — surrogate primary key.
+- `file_id` — FK to `file_index(id)`. Nullable (`ON DELETE SET NULL`) because PostToolUse hooks may fire for files that weren't in the index yet (newly-created files observed before the next reindex/prime).
+- `path` — forward-slash project-relative path, captured alongside `file_id` so events remain useful if the indexed row is pruned.
+- `tool_name` — `Edit` | `Write` | `MultiEdit` (matches the PostToolUse matcher). Free-form TEXT to accommodate future Claude Code tool names.
+- `ts_ms` — UNIX milliseconds at the moment the hook fired.
+- `session_id` — Claude Code session identifier (from `CLAUDE_CODE_SESSION_ID` env), or a generated UUID if unset. Used by the `reconcile` Stop-hook pass.
+
+**Written by:** `bin/optima-hook.ts` via the `observe` subcommand.
+**Read by:** `bin/optima-hook.ts` via the `reconcile` subcommand (group by `session_id` or last-2-hours window).
+
+**Rationale:** This table is the persistent bridge between deterministic hook captures and the existing knowledge tables (`gotchas`, `task_outcomes`). Without it there is no audit trail of what was edited during a session, and reconciliation heuristics can't run.
+
 ## Phase 2 Schema Migration
 
 Phase 2 automated pruning (see Product Spec section 10.4) requires two new columns:

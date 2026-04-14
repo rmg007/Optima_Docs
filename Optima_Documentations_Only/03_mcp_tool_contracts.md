@@ -2,6 +2,8 @@
 
 All tool inputs and outputs are validated with Zod. Copy these schemas into the tool implementation files.
 
+> **Note on autonomous capture:** As of the Hooks Autonomy layer, Optima's learning loop is split across two surfaces. The **MCP tools documented here** (all five) are LLM-invoked and primarily cover *task start* (`optima_get_context`) and *explicit error memorization* (`optima_memorize`). The **hook CLI** (`bin/optima-hook.ts` — not an MCP tool) handles passive capture (`edit_events`), lazy re-indexing on SessionStart, and Stop-hook reconciliation. No new MCP tools are added for the hooks layer — hooks open `.optima/optima.db` directly.
+
 ## Tool Search & Discoverability
 
 Since early 2026, Claude Code uses **Tool Search** (lazy loading) for MCP tools by default, reducing context usage by ~95% compared to loading all tool schemas upfront. Claude Code uses semantic matching on tool names and descriptions to decide which tools to load for a given task.

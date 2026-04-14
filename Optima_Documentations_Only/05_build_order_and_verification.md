@@ -508,3 +508,73 @@ Add this after every build step's "Definition of Done":
 - [ ] README.md includes sample output of `npm run doctor`
 - [ ] `npm run lint` passes (no TypeScript errors in scripts)
 - [ ] No new tests required (installer/doctor are utilities, not core logic)
+
+### Step 14: Hook CLI (`bin/optima-hook.ts`) & Migration 004
+
+**Files to create:** `bin/optima-hook.ts`, `src/db/migrations/004_edit_events.ts`; update `src/db/migrations/index.ts`, `tsup.config.ts`, `tsconfig.json`, `package.json`.
+
+**Dependencies:** Step 13 (installer + doctor in place)
+
+**Estimated time:** 3 hours
+
+**Build Prompt:**
+
+> Create migration `004_edit_events.ts` adding an `edit_events` table with columns `id INTEGER PRIMARY KEY AUTOINCREMENT`, `file_id INTEGER REFERENCES file_index(id) ON DELETE SET NULL`, `path TEXT NOT NULL`, `tool_name TEXT NOT NULL`, `ts_ms INTEGER NOT NULL`, `session_id TEXT`. Add indexes on `ts_ms`, `path`, and `session_id`. Register the migration in `src/db/migrations/index.ts`.
+>
+> Create `bin/optima-hook.ts` — a Claude Code lifecycle hook CLI with three subcommands: `prime --project <path>` (SessionStart: lazy mtime-delta re-index), `observe --tool <name> --file <path>` (PostToolUse: inserts an `edit_events` row), `reconcile --project <path>` (Stop: increments `hit_count` on gotchas whose `files` overlap with edited paths, inserts a `task_outcomes` row when >= 3 edits touch >= 2 files). Contract: (a) every subcommand always exits 0 regardless of error, (b) nothing is ever written to stdout — stderr-only via `logger`, (c) subcommands open SQLite directly via a local helper (do NOT go through `getDatabase()` because the project root may differ from `process.cwd()`), (d) share existing modules — no duplicated indexing/memory logic. Log component names: `hook.prime`, `hook.observe`, `hook.reconcile`, `hook.cli`. Wrap `main()` in try/catch/finally with `process.exit(0)` in the finally block.
+>
+> Update `tsup.config.ts` to emit two entries: `dist/index.js` (MCP server) and `dist/optima-hook.js` (hook CLI). Use a shared banner shebang. Update `tsconfig.json` to include `bin/**/*.ts` in `include`. Add `"optima-hook": "dist/optima-hook.js"` to `package.json` bin entries. Update the `postbuild` script to chmod +x both entries.
+
+**Verification:**
+
+- `npm run build` produces both `dist/index.js` and `dist/optima-hook.js`
+- `node dist/optima-hook.js prime --project .` exits 0, writes nothing to stdout, creates `.optima/optima.db` if absent
+- `node dist/optima-hook.js observe --tool Edit --file src/index.ts` exits 0 and inserts one row into `edit_events`
+- `node dist/optima-hook.js reconcile --project .` exits 0; when preceded by observes on files referenced by existing gotchas, those gotchas' `hit_count` is incremented
+- Unknown subcommand → exit 0 silently
+- Schema version table reports `[1, 2, 3, 4]` after migration 004 applies
+- New test file `test/optima-hook.test.ts` covers prime, observe, reconcile paths (temp SQLite DB)
+
+**Definition of Done:**
+
+- [ ] `src/db/migrations/004_edit_events.ts` created and registered
+- [ ] `bin/optima-hook.ts` (< 300 lines) implements all three subcommands
+- [ ] `tsup.config.ts` emits two entries
+- [ ] `package.json` bin has `optima-hook`
+- [ ] `tsconfig.json` includes `bin/**/*.ts`
+- [ ] Tests in `test/optima-hook.test.ts` pass against a built dist
+- [ ] `npm run lint` passes
+- [ ] All existing tests still pass (schema version expectation updated from `[1,2,3]` to `[1,2,3,4]`)
+
+### Step 15: Installer Hook Integration & Doctor Check
+
+**Files to update:** `scripts/install.js`, `scripts/doctor.js`
+
+**Dependencies:** Step 14 (hook CLI builds cleanly)
+
+**Estimated time:** 1.5 hours
+
+**Build Prompt:**
+
+> Extend `scripts/install.js` with an `installClaudeHooks(logLevel)` helper that reads `~/.claude/settings.json` (creating parent dirs if needed), merges three hook entries into `hooks.SessionStart`, `hooks.PostToolUse` (with matcher `"Edit|Write|MultiEdit"`), and `hooks.Stop`. Each command uses the absolute path to `dist/optima-hook.js` invoked via `node "<absolute path>"` (not the bare `optima-hook` name, since Claude Code's shell env may not have `node_modules/.bin` on PATH). Use append-only merge: if any existing entry in a given event array has a command containing `optima-hook`, leave the array alone; otherwise push our entry. Write atomically (temp + rename) with backup. Flag the new behaviour behind `--with-hooks` (default true); add `--no-hooks` to skip. On `--uninstall`, remove only entries whose `command` contains `optima-hook`.
+>
+> Extend `scripts/doctor.js` with a 5th check: read `~/.claude/settings.json`, count `hooks.{SessionStart,PostToolUse,Stop}` entries whose command includes `optima-hook`. Report `✓ 3 hooks registered` or `! N/3 hooks registered — missing: ...` or `✗ hooks not registered (run `npm run install:mcp`)`.
+
+**Verification:**
+
+- `npm run install:mcp` creates or updates `~/.claude/settings.json` with three hook entries
+- Re-running `npm run install:mcp` does NOT duplicate hook entries
+- Pre-existing, non-Optima hook entries in the same event are preserved
+- `npm run install:mcp --no-hooks` skips hook registration entirely
+- `npm run uninstall:mcp` removes the three Optima hook entries without touching unrelated hooks
+- `npm run doctor` reports all 5 checks; green when hooks are registered correctly
+
+**Definition of Done:**
+
+- [ ] `installClaudeHooks(logLevel)` implemented with append-only merge
+- [ ] `uninstallClaudeHooks()` implemented with substring-match filter
+- [ ] `--with-hooks` / `--no-hooks` flags work
+- [ ] Hook commands use absolute path to `dist/optima-hook.js`
+- [ ] `scripts/doctor.js` reports a 5th check (`5. Claude Code hooks`)
+- [ ] Re-running installer is idempotent with respect to hook entries
+- [ ] Uninstall does not touch unrelated hooks
