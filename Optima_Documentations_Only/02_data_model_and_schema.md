@@ -6,7 +6,7 @@ All data lives in ONE SQLite database: `.optima/optima.db` at the project root.
 
 ## Database Initialization & Lifecycle
 
-**When:** Database is created on the first `optima_get_context` call, as part of the cold start bootstrap sequence (see `01_PRODUCT_SPEC_MVP.md` "Cold Start Bootstrap Sequence"). The MCP server process starts and listens on stdio immediately — database creation is deferred until first tool invocation.
+**When:** Database is created on the first `optima_get_context` call, as part of the cold start bootstrap sequence (see `01_product_spec_mvp.md` "Cold Start Bootstrap Sequence"). The MCP server process starts and listens on stdio immediately — database creation is deferred until first tool invocation.
 
 **Owner:** `src/db/connection.ts` exports a `getDatabase()` function that lazily initializes the connection. First call creates `.optima/` directory, opens/creates `optima.db`, and runs migrations. Subsequent calls return the cached connection. The tool handlers call `getDatabase()` — they never manage the connection directly.
 
@@ -179,7 +179,7 @@ export const securityFindings = sqliteTable("security_findings", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   fileId: integer("file_id").notNull().references(() => fileIndex.id, { onDelete: "cascade" }),
   line: integer("line").notNull(),
-  patternName: text("pattern_name").notNull(),  // "aws_key" | "private_key" | "generic_api_key" | "jwt" | "connection_string"
+  patternName: text("pattern_name").notNull(),  // "aws_key" | "private_key" | "generic_api_key" | "jwt" | "connection_string" | "github_token" | "generic_secret"
   severity: text("severity").notNull().default("high"),  // "critical" | "high" | "medium"
   snippet: text("snippet"),                      // Surrounding context (NOT the secret itself — redacted). e.g. "AKIA****...****WXYZ on line 42"
   foundAt: text("found_at").notNull().default(sql`(datetime('now'))`),
@@ -279,7 +279,7 @@ This is the **single source of truth** for which config files Optima checks when
 
 **Impact on CLAUDE.md generation:** When `linterDetected` is non-null, the necessity test in Doc 04 excludes formatting/style rules from the `architecture_rules` section (the linter already enforces them).
 
-**JSON field serialization/deserialization:** Several Drizzle `text()` columns store JSON-encoded arrays: `techStack`, `linterDetected`, `files` (in gotchas and rules), and `tags`. These are stored as raw JSON strings in SQLite (e.g., `'["eslint","prettier"]'`). When reading from the database for tool output or internal use, **always `JSON.parse()` these fields** into their typed array form. When writing, **always `JSON.stringify()`** the array before storage. The TypeScript interfaces and Zod schemas define the *parsed* types (e.g., `string[]`, `string[] | null`), NOT the raw JSON string form.
+**JSON field serialization/deserialization:** Several Drizzle `text()` columns store JSON-encoded arrays or objects: `techStack`, `linterDetected`, `keyDependencies`, `files` (in gotchas, rules, and task_outcomes), and `tags`. These are stored as raw JSON strings in SQLite (e.g., `'["eslint","prettier"]'`). When reading from the database for tool output or internal use, **always `JSON.parse()` these fields** into their typed array form. When writing, **always `JSON.stringify()`** the array before storage. The TypeScript interfaces and Zod schemas define the *parsed* types (e.g., `string[]`, `string[] | null`), NOT the raw JSON string form.
 
 ```typescript
 // Reading from DB → tool output
@@ -452,6 +452,7 @@ Copy into `src/types.ts` verbatim.
 export interface GetContextInput {
   path: string;
   task_type?: "bug_fix" | "feature" | "refactor" | "test" | "review";
+  search_query?: string;
 }
 
 export interface SecurityFinding {
@@ -483,6 +484,28 @@ export type MemorizeInput =
   | { type: "pattern"; pattern: string; example?: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "preference"; preference: string; files?: string[]; directory?: string; tags?: string[] }
   | { type: "task_outcome"; task: string; outcome: "success" | "partial" | "abandoned"; learnings?: string; files?: string[]; directory?: string; duration_hint?: string; tags?: string[] };
+
+**MemorizeInput → DB Column Mapping:**
+
+| Type | Input Field | DB Table | DB Column | Notes |
+|------|-------------|----------|-----------|-------|
+| `error_fix` | `error` | `gotchas` | `error_text` | Sanitized via `sanitizeError()` before storage |
+| `error_fix` | `resolution` | `gotchas` | `resolution` | Stored verbatim |
+| `error_fix` | `rootCause` | `gotchas` | `root_cause` | Optional — stored verbatim |
+| `error_fix` | `dependencyVersion` | `gotchas` | `dependency_version` | Optional — e.g. `"drizzle-orm@^0.38.0"` |
+| `error_fix` | (computed) | `gotchas` | `error_hash` | SHA-256 of `normalizeError(sanitizeError(error))` |
+| `architectural_rule` | `rule` | `rules` | `content` | — |
+| `architectural_rule` | `rationale` | `rules` | `rationale` | Optional |
+| `pattern` | `pattern` | `rules` | `content` | — |
+| `pattern` | `example` | `rules` | `rationale` | Reuses `rationale` column — stores code example |
+| `preference` | `preference` | `rules` | `content` | — |
+| `task_outcome` | `task` | `task_outcomes` | `task` | — |
+| `task_outcome` | `outcome` | `task_outcomes` | `outcome` | — |
+| `task_outcome` | `learnings` | `task_outcomes` | `learnings` | Optional |
+| `task_outcome` | `duration_hint` | `task_outcomes` | `duration_hint` | Optional |
+| All types | `files` | respective | `files` | JSON stringified: `JSON.stringify(files ?? [])` |
+| All types | `directory` | respective | `directory` | Stored as-is (nullable) |
+| All types | `tags` | respective | `tags` | JSON stringified: `JSON.stringify(tags ?? [])` |
 
 export interface TaskOutcomeEntry {
   id: number;
@@ -636,6 +659,7 @@ export interface GotchaLedger {
     errorText: string;      // Already sanitized
     errorHash: string;      // SHA-256 of normalized error
     resolution: string;
+    rootCause: string | null;  // Why the error occurred (optional, maps from MemorizeInput.rootCause)
     dependencyVersion: string | null;  // e.g. "drizzle-orm@^0.38.0"
     files: string[];
     directory: string | null;

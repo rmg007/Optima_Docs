@@ -223,6 +223,8 @@ export function closeDatabase(): void {
 ## Zod Schemas
 
 ```tsx
+// File: src/schemas.ts — Copy these schemas into this file.
+
 import { z } from "zod";
 
 // ── optima_get_context ────────────────────────────────────────
@@ -450,7 +452,7 @@ When `search_query` is provided in the input, run FTS5 full-text search in ADDIT
 When querying `rules` and `gotchas` by directory, apply hierarchical matching — a rule scoped to `src/api/` applies to `src/api/auth/login.ts`. The matching logic:
 
 1. Return all entries where `directory IS NULL` (project-wide).
-2. Return all entries where `directory` is an exact prefix of the requested path (after forward-slash normalization).
+2. Return all entries where `directory` is an exact prefix of the requested path (after forward-slash normalization). **Path boundary check:** use `requestedPath === directory || requestedPath.startsWith(directory + "/")` to prevent `src/api` from matching `src/api-v2/`. Ensure both paths use forward slashes and have no trailing slash before comparison.
 3. Sort results: most specific directory first (longest `directory` path), then by `created_at` descending within the same scope.
 4. When the same topic has rules at multiple scopes, the most specific scope takes precedence in CLAUDE.md generation (e.g., a rule at `src/api/auth/` overrides a rule at `src/api/` if they cover the same subject).
 
@@ -759,6 +761,7 @@ const ALWAYS_EXCLUDE = [
   ".env.development.local", ".env.production.local",
   // NOTE: .env.example and .env.template are NOT excluded — they are
   // typically committed and safe to index (they contain placeholder values).
+  "**/secrets",           // Matches any secrets/ directory at any depth (per Doc 00 security-sensitive paths)
   ".claude/settings.local.json",
   "CLAUDE.local.md",
 ];
@@ -877,7 +880,7 @@ Optima DOES index `.claude/settings.json`, `.claude/agents/`, `.claude/commands/
 
 1. Validate input with `MemorizeInputSchema`.
 2. Based on `type`:
-    - `error_fix`: **First, sanitize the raw error text** — scrub sensitive data (API keys, JWTs, database connection strings, bearer tokens, long hash strings) using the `sanitizeError()` function below. Store the sanitized version as `error_text` in the database. Then normalize the sanitized string (strip paths, line numbers, timestamps) and compute `error_hash` as SHA-256 of the normalized string. Check `gotchas` table for existing entry with same `error_hash`. If found: update `resolution`, `files`, `updatedAt`. If not found: insert new row.
+    - `error_fix`: **First, sanitize the raw error text** — scrub sensitive data (API keys, JWTs, database connection strings, bearer tokens, long hash strings) using the `sanitizeError()` function below. Store the sanitized version as `error_text` in the database. Then normalize the sanitized string (strip paths, line numbers, timestamps) and compute `error_hash` as SHA-256 of the normalized string. Check `gotchas` table for existing entry with same `error_hash`. If found: update `resolution`, `root_cause`, `dependency_version`, `files`, `updatedAt`. If not found: insert new row with all fields (see MemorizeInput → DB Column Mapping in Doc 02).
     - `architectural_rule`: Insert into `rules` table with `type = "architectural_rule"`.
     - `pattern`: Insert into `rules` table with `type = "pattern"`.
     - `preference`: Insert into `rules` table with `type = "preference"`.
@@ -890,6 +893,8 @@ Optima DOES index `.claude/settings.json`, `.claude/agents/`, `.claude/commands/
 **Error normalization for dedup:**
 
 ```tsx
+// File: src/memory/error-normalizer.ts
+
 function normalizeError(error: string): string {
   return error
     // Strip Unix paths (/foo/bar.ts)
@@ -915,16 +920,26 @@ function normalizeError(error: string): string {
 **Error sanitization function (runs BEFORE normalization, BEFORE storage):**
 
 ```tsx
+// File: src/memory/error-normalizer.ts
+
 function sanitizeError(error: string): string {
   return error
     // Strip Bearer tokens
     .replace(/bearer\s+[\w\-.]+/gi, "bearer <REDACTED>")
+    // Strip AWS access key IDs (AKIA prefix, 20 chars — too short for 40+ catch-all)
+    .replace(/AKIA[0-9A-Z]{16}/g, "<AWS_KEY_REDACTED>")
+    // Strip GitHub tokens (ghp_ prefix)
+    .replace(/ghp_[a-zA-Z0-9]{36}/g, "<GITHUB_TOKEN_REDACTED>")
     // Strip API keys (common prefixes: sk-, pk-, api_, key_)
     .replace(/(?:sk|pk|api|key)[-_][a-zA-Z0-9]{20,}/g, "<API_KEY_REDACTED>")
+    // Strip private key PEM headers
+    .replace(/-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/g, "<PRIVATE_KEY_REDACTED>")
     // Strip database connection strings
     .replace(/(postgres|mysql|mongodb|redis):\/\/[^\s"']+/gi, "<DB_URL_REDACTED>")
     // Strip JWTs (three base64 segments separated by dots)
     .replace(/eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g, "<JWT_REDACTED>")
+    // Strip password/secret/token assignments (values 8+ chars, catches short secrets)
+    .replace(/(?:secret|password|passwd|token)\s*[:=]\s*['"]([^'"]{8,})['"]/gi, (_, p1) => `<SECRET_REDACTED>`)
     // Strip long hex/base64 strings (likely tokens, >=40 chars)
     .replace(/[a-zA-Z0-9_-]{40,}/g, "<SECRET_REDACTED>");
 }

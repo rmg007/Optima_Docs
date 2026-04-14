@@ -222,7 +222,7 @@ If any pre-review-pass version of a section conflicts with the current docs, the
    - `fs.mkdirSync('.optima', { recursive: true })` — one-time cold start path, not hot path (see Doc 02 DB Init step 1).
    - `fs.lstatSync()` for symlink detection — acceptable in file walker if async `fs.lstat()` adds complexity with no measurable benefit.
 5. **Tests are mandatory.** Every module ships with tests. Minimum 80% coverage.
-6. **Errors use a closed taxonomy.** Every thrown error must use one of the error codes defined in `03_MCP_TOOL_CONTRACTS.md`. Never throw bare `new Error('...')`.
+6. **Errors use a closed taxonomy.** Every thrown error must use one of the error codes defined in `03_mcp_tool_contracts.md`. Never throw bare `new Error('...')`.
 7. **Paths are always forward-slash normalized.** All file paths stored in SQLite — including `file_index.path`, `gotchas.directory`, `rules.directory`, and all paths inside `files` JSON arrays in `gotchas` and `rules` tables — use forward slashes (`src/utils/foo.ts`), regardless of OS. Normalize on ingestion using `path.replace(/\\/g, '/')`. Tool output paths are also forward-slash normalized. Symlinks are NOT followed — if `fs.lstat` reports a symlink, skip the file silently. This avoids infinite loops and ensures deterministic indexing.
 
 ## Claude Code State Awareness
@@ -262,7 +262,7 @@ Optima operates alongside Claude Code. Understanding Claude Code's internal stat
 - **DO NOT modify `.claude/settings.json` permissions or deny rules.** Optima never writes permission rules. Security boundaries are the developer's domain.
 - **DO NOT index Claude Code's internal state.** Never read or index `~/.claude/`, `.claude/session-env/`, `.claude/projects/`, or `.claude/file-history/`.
 - **DO NOT build a web UI, CLI interface, or REST API.** Optima is a headless MCP server. Stdio transport only.
-- **DO NOT implement Phase 2 features.** No agent generation, no token optimization scoring, no adaptive prompts, no hook-based feedback. If it's not in `01_PRODUCT_SPEC_MVP.md` included list, don't build it.
+- **DO NOT implement Phase 2 features.** No agent generation, no token optimization scoring, no adaptive prompts, no hook-based feedback. If it's not in `01_product_spec_mvp.md` included list, don't build it.
 - **DO NOT use `npm`, `npx`, or `node` commands.** Bun only.
 - **DO NOT use `bun:sqlite` directly.** Use `better-sqlite3` for runtime portability (resolved Q6 — allows fallback to Node if Bun's MCP spawner has issues). If Bun is proven reliable, can swap to `bun:sqlite` as a future optimization.
 - **DO NOT install `axios`, `node-fetch`, `express`, `react`, or `electron`.** This project has no HTTP client, no HTTP server, no frontend.
@@ -274,7 +274,7 @@ Optima operates alongside Claude Code. Understanding Claude Code's internal stat
 
 If a spec is ambiguous or two documents seem to contradict each other:
 
-1. Trust `02_DATA_MODEL_AND_SCHEMA.md` for data shapes.
-2. Trust `03_MCP_TOOL_CONTRACTS.md` for tool behavior.
-3. Trust `04_INCEPTION_PAYLOAD.md` for generated file content.
+1. Trust `02_data_model_and_schema.md` for data shapes.
+2. Trust `03_mcp_tool_contracts.md` for tool behavior.
+3. Trust `04_inception_payload.md` for generated file content.
 4. If still unclear, stop and ask. Do not improvise.

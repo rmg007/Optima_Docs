@@ -114,7 +114,7 @@ Optima generates and maintains these files in the host project:
 
 **Optima reads but does NOT modify:** `.claude/settings.json`, `package.json`, `tsconfig.json`, `pyproject.toml` (used for project analysis and tech stack detection).
 
-**Optima NEVER reads or indexes:** `~/.claude/session-env/` (plaintext secrets), `~/.claude/projects/` (session transcripts), `~/.claude/file-history/` (edit snapshots), `CLAUDE.local.md` (developer's personal overrides), `.claude/settings.local.json` (personal permissions), `.env` files, or any Claude Code internal operational state. See `00_START_HERE.md` for the full exclusion list.
+**Optima NEVER reads or indexes:** `~/.claude/session-env/` (plaintext secrets), `~/.claude/projects/` (session transcripts), `~/.claude/file-history/` (edit snapshots), `CLAUDE.local.md` (developer's personal overrides), `.claude/settings.local.json` (personal permissions), `.env` files, or any Claude Code internal operational state. See `00_start_here.md` for the full exclusion list.
 
 **Version control for Optima-generated files:** All files Optima generates are designed to be committed to git (shared with the team):
 
@@ -151,8 +151,12 @@ optima/
 │   │   ├── claude-md.ts            # CLAUDE.md generation with section markers
 │   │   └── feedback-rules.ts       # .claude/rules/optima-feedback.md generation
 │   ├── db/
-│   │   ├── schema.ts               # Drizzle schema (COPY FROM 02_DATA_MODEL)
-│   │   ├── migrations.ts           # Schema versioning
+│   │   ├── schema.ts               # Drizzle schema (COPY FROM 02_data_model_and_schema)
+│   │   ├── migrations.ts           # Schema versioning and migration runner
+│   │   ├── migrations/
+│   │   │   ├── 001_initial.ts      # CREATE TABLE for all 9 tables
+│   │   │   ├── 002_fts5.ts         # FTS5 virtual tables + sync triggers
+│   │   │   └── index.ts            # Exports ordered migration list
 │   │   └── connection.ts           # Database lifecycle
 │   └── utils/
 │       ├── hasher.ts               # SHA-256 content hashing
@@ -180,7 +184,7 @@ optima/
 - `optima_get_context` with lazy re-indexing via mtime checks
 - `optima_memorize` with unified input (error_fix, architectural_rule, pattern, preference)
 - `optima_reindex` for full project re-index
-- Project analyzer: detect tech stack, build/test/lint commands, project domain/purpose (from README/package.json description), and linter/formatter presence (see authoritative list in `02_DATA_MODEL_AND_SCHEMA.md` — suppresses style rules in generated [CLAUDE.md](http://CLAUDE.md))
+- Project analyzer: detect tech stack, build/test/lint commands, project domain/purpose (from README/package.json description), and linter/formatter presence (see authoritative list in `02_data_model_and_schema.md` — suppresses style rules in generated [CLAUDE.md](http://CLAUDE.md))
 - File indexer: walk project (respecting .gitignore), track mtimes, compute hashes
 - Entity extractor: Tree-sitter parsing for TypeScript (functions, classes, interfaces, types, exports)
 - Gotcha Ledger: error → solution storage with normalized dedup

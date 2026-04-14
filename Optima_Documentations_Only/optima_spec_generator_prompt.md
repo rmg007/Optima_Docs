@@ -34,7 +34,7 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
 - Explicit non-goals (Pull from MVP Excluded list)
 
 ### 2. Tech Stack & Configuration
-- Copy tech stack table from 00_START_HERE.md
+- Copy tech stack table from 00_start_here.md
 - Add MCP `.mcp.json` examples (bunx and npx fallback)
 - Copy exact `package.json` with all dependencies and versions (from Doc 00)
 - Copy exact `tsconfig.json`, `tsup.config.ts`, `vitest.config.ts`, `drizzle.config.ts` (from Doc 00)
@@ -68,6 +68,8 @@ The 5 Lean Context Pack documents (00–04) + Product Specification + resolved q
 - **Entity Extractor Implementation:** Copy full `extractEntities()` function from Doc 03 verbatim — includes all edge cases (async, arrow, getters/setters, overloads, enums, declare skip)
 - **File Walker Implementation:** Copy `walkProject()` function from Doc 03 — depth-first alphabetical, binary detection, symlink skip, ignore integration
 - **MCP Server Bootstrap:** Copy `src/index.ts` and `src/server.ts` from Doc 03 — includes signal handling, graceful shutdown, `wrapError()` pattern
+  - **`src/schemas.ts`:** All Zod input/output schemas live here (imported by `server.ts` as `./schemas.js`). Copy verbatim from Doc 03 Zod section.
+  - **`src/memory/error-normalizer.ts`:** Contains `sanitizeError()` and `normalizeError()` functions. Copy verbatim from Doc 03 error normalization section.
 - **Database Connection Lifecycle:** Copy `src/db/connection.ts` from Doc 03 — lazy init, corruption recovery, WAL mode
 - **Error Sanitization:** `sanitizeError()` function runs BEFORE normalization, BEFORE storage — scrubs API keys, JWTs, DB URLs, bearer tokens
 - **Error Normalization:** `normalizeError()` function — includes Windows path stripping, UUID stripping

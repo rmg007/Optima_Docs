@@ -163,6 +163,39 @@
       "query": { "directory": "src/api/", "files": ["src/api/helpers.ts"] },
       "expectedResult": ["g1", "g2"],
       "notes": "g1 matches via file array containing src/api/helpers.ts (hit_count 7). g2 matches via exact directory src/api/ AND file match (hit_count 3). g3 has directory lib/ which is not a parent of src/api/ and its files don't include src/api/helpers.ts, so no match. Sorted by hit_count: 7, 3."
+    },
+    {
+      "id": "GR-013",
+      "description": "FTS5 search finds gotcha from unrelated directory (cross-directory discovery)",
+      "setup": [
+        { "id": "g1", "error_text": "ECONNREFUSED on database connection pool", "error_hash": "hash_g1", "resolution": "Increase pool max connections from 5 to 20", "files": ["src/db/pool.ts"], "directory": "src/db/", "hit_count": 8 },
+        { "id": "g2", "error_text": "Timeout on user API endpoint", "error_hash": "hash_g2", "resolution": "Add request timeout middleware", "files": ["src/api/users.ts"], "directory": "src/api/", "hit_count": 3 }
+      ],
+      "query": { "directory": "src/middleware/", "search_query": "ECONNREFUSED database" },
+      "expectedResult": ["g1"],
+      "notes": "Neither gotcha matches via directory prefix (src/db/ and src/api/ are not parents of src/middleware/). But g1 matches via FTS5 search on 'ECONNREFUSED database'. g2 does not match the search terms. FTS-only results are appended after directory-matched results (none in this case)."
+    },
+    {
+      "id": "GR-014",
+      "description": "FTS5 search merged with directory results (directory results first, FTS-only appended, deduped by ID)",
+      "setup": [
+        { "id": "g1", "error_text": "JWT token expired during auth", "error_hash": "hash_g1", "resolution": "Implement token refresh middleware", "files": ["src/auth/jwt.ts"], "directory": "src/auth/", "hit_count": 10 },
+        { "id": "g2", "error_text": "JWT signature verification failed", "error_hash": "hash_g2", "resolution": "Use RS256 algorithm instead of HS256", "files": ["src/crypto/verify.ts"], "directory": "src/crypto/", "hit_count": 15 },
+        { "id": "g3", "error_text": "Session cookie not set", "error_hash": "hash_g3", "resolution": "Add sameSite and secure flags", "files": [], "directory": "src/auth/", "hit_count": 5 }
+      ],
+      "query": { "directory": "src/auth/", "search_query": "JWT token" },
+      "expectedResult": ["g1", "g3", "g2"],
+      "notes": "g1 and g3 match via directory prefix (src/auth/). g1 also matches FTS search. g2 matches ONLY via FTS ('JWT' in error text). Merge order: directory results first sorted by hit_count (g1=10, g3=5), then FTS-only results (g2=15). g1 is deduped — appears once in directory results, not repeated in FTS section."
+    },
+    {
+      "id": "GR-015",
+      "description": "FTS5 malformed query falls back to directory-only (no throw)",
+      "setup": [
+        { "id": "g1", "error_text": "Cannot find module", "error_hash": "hash_g1", "resolution": "Fix import path", "files": [], "directory": "src/", "hit_count": 4 }
+      ],
+      "query": { "directory": "src/lib/", "search_query": "unbalanced \"quote" },
+      "expectedResult": ["g1"],
+      "notes": "The search_query has unbalanced quotes which is invalid FTS5 syntax. The FTS5 query should fail gracefully and fall back to directory-only matching. g1 matches via directory prefix (src/ is parent of src/lib/). No throw — bad search queries degrade, not fail."
     }
   ]
 }
